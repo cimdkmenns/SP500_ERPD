@@ -1,5 +1,5 @@
-# app.py — Elder-Ray Power Dominance (Multi-Index)
-# ------------------------------------------------
+# app.py — Elder-Ray Power Dominance (Multi-Index + Overview)
+# -----------------------------------------------------------
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -8,26 +8,30 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 # --------------------- Page & Sidebar ---------------------
-st.set_page_config(page_title="Elder-Ray Dominance (Multi-Index)", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Elder-Ray Dominance (Multi-Index)",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 st.sidebar.title("⚙️ Settings")
 
-# Common US/Global indices & ETFs (add/remove as you like)
+# Common US/Global indices & ETFs (edit to taste)
 DEFAULT_TICKERS = [
     "SPY", "^GSPC", "ES=F",   # S&P 500 ETF, Index, E-mini futures
     "QQQ", "^NDX", "NQ=F",    # Nasdaq 100 ETF, Index, futures
     "DIA", "^DJI", "YM=F",    # Dow
-    "IWM",                     # Russell 2000 ETF
-    "^FTSE",                   # FTSE 100
-    "^GDAXI",                  # DAX
-    "^N225"                    # Nikkei 225
+    "IWM",                    # Russell 2000 ETF
+    "^FTSE",                  # FTSE 100
+    "^GDAXI",                 # DAX
+    "^N225",                  # Nikkei 225
 ]
 
 # MULTISELECT (Option 2)
 tickers = st.sidebar.multiselect(
     "Select indices / tickers",
     options=sorted(DEFAULT_TICKERS),
-    default=["SPY", "QQQ", "IWM"]
+    default=["SPY", "QQQ", "IWM"],
 )
 
 interval = st.sidebar.selectbox("Interval", ["1m", "5m", "15m", "1h", "1d"], index=1)
@@ -39,7 +43,9 @@ if refresh_secs > 0:
     st_autorefresh(interval=refresh_secs * 1000, key="autorefresh")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Tip: For intraday intervals (1–15m) use liquid tickers like SPY/QQQ/ES=F/NQ=F for more reliable updates.")
+st.sidebar.caption(
+    "Tip: For intraday intervals (1–15m) use liquid tickers like SPY/QQQ/ES=F/NQ=F for more reliable updates."
+)
 
 # --------------------- Helpers ---------------------
 def interval_to_period(iv: str) -> str:
@@ -51,28 +57,69 @@ def interval_to_period(iv: str) -> str:
         "1d": "1y",
     }.get(iv, "5d")
 
+
+def _map_ohlc_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure single-level OHLCV columns exist:
+    Datetime, Open, High, Low, Close, Adj Close, Volume
+    Works even if yfinance returned flattened multi-index names like 'Close_SPY'.
+    """
+    cols = list(df.columns)
+
+    # Datetime
+    if "Datetime" not in cols:
+        if "Date" in cols:
+            df = df.rename(columns={"Date": "Datetime"})
+        else:
+            # last resort: build from index
+            df.insert(0, "Datetime", pd.to_datetime(df.index))
+
+    # For each required field, try to find a column that ends with it
+    wanted = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+    for req in wanted:
+        if req not in df.columns:
+            target_lower = req.lower().replace(" ", "")
+            cand = None
+            for c in cols:
+                c_norm = str(c).lower().replace(" ", "")
+                # common patterns: 'close', 'close_spy', 'spy_close'
+                if c_norm == target_lower or c_norm.endswith("_" + target_lower) or c_norm.startswith(target_lower + "_"):
+                    cand = c
+                    break
+            if cand is not None:
+                df[req] = df[cand]
+
+    # Final check
+    for r in ["Open", "High", "Low", "Close"]:
+        if r not in df.columns:
+            raise ValueError(f"Missing column {r}")
+
+    return df
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker: str, interval: str) -> pd.DataFrame:
-    """Download OHLCV from Yahoo, normalized to columns: Datetime/Open/High/Low/Close/Adj Close/Volume"""
+    """Download OHLCV from Yahoo, normalize to flat columns."""
     period = interval_to_period(interval)
     df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False)
     if df is None or df.empty:
         raise ValueError("No data returned")
+
+    # Reset index and flatten multi-index columns if present
     df = df.reset_index()
-    # Normalize index column name across intervals
-    if "Datetime" not in df.columns:
-        # yfinance may use 'Date' for daily
-        if "Date" in df.columns:
-            df = df.rename(columns={"Date": "Datetime"})
-        else:
-            df.insert(0, "Datetime", pd.to_datetime(df.index))
-    # Ensure title-case OHLC names
-    df = df.rename(columns=lambda c: str(c).title())
-    # Guard required columns
-    for c in ["Open", "High", "Low", "Close"]:
-        if c not in df.columns:
-            raise ValueError(f"Missing column {c}")
-    return df
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            "_".join([str(x) for x in tup if x is not None and str(x) != ""])
+            for tup in df.columns.to_list()
+        ]
+
+    # Normalize canonical column names
+    df = _map_ohlc_columns(df)
+
+    # Keep only what we need
+    keep = [c for c in ["Datetime", "Open", "High", "Low", "Close", "Adj Close", "Volume"] if c in df.columns]
+    return df[keep].copy()
+
 
 def compute_elder_ray(df: pd.DataFrame, ema_period: int) -> pd.DataFrame:
     out = df.copy()
@@ -80,18 +127,19 @@ def compute_elder_ray(df: pd.DataFrame, ema_period: int) -> pd.DataFrame:
     out["BullPower"] = out["High"] - out["EMA"]
     out["BearPower"] = out["Low"] - out["EMA"]
     out["Dominance"] = out["BullPower"] + out["BearPower"]
-    # Simple signals (example): bear power crosses below 0 => short entry; dominance crosses above 0 => exit
+    # Example signal logic
     out["ShortEntry"] = (out["BearPower"].shift(1) > 0) & (out["BearPower"] <= 0)
     out["ExitShort"]  = (out["Dominance"].shift(1) < 0) & (out["Dominance"] >= 0)
     return out
 
+
 # Plot helpers
-def plot_price(view, ema_period):
-    fig = plt.figure(figsize=(10.5, 4.8))
+def plot_price(view: pd.DataFrame, ema_period: int):
+    fig = plt.figure(figsize=(11.0, 4.8))
     plt.plot(view["Datetime"], view["Close"], label="Close")
-    plt.plot(view["Datetime"], view["Ema"], label=f"EMA {ema_period}")
-    se = view[view["Shortentry"]]
-    ex = view[view["Exitshort"]]
+    plt.plot(view["Datetime"], view["EMA"], label=f"EMA {ema_period}")
+    se = view[view["ShortEntry"]]
+    ex = view[view["ExitShort"]]
     if not se.empty:
         plt.scatter(se["Datetime"], se["Close"], s=28, label="Short Entry (Bear +→–)")
     if not ex.empty:
@@ -102,10 +150,11 @@ def plot_price(view, ema_period):
     plt.tight_layout()
     return fig
 
-def plot_powers(view):
-    fig = plt.figure(figsize=(10.5, 3.8))
-    plt.plot(view["Datetime"], view["Bullpower"], label="Bull Power")
-    plt.plot(view["Datetime"], view["Bearpower"], label="Bear Power")
+
+def plot_powers(view: pd.DataFrame):
+    fig = plt.figure(figsize=(11.0, 3.8))
+    plt.plot(view["Datetime"], view["BullPower"], label="Bull Power")
+    plt.plot(view["Datetime"], view["BearPower"], label="Bear Power")
     plt.axhline(0)
     plt.title("Elder-Ray Bull & Bear Power")
     plt.legend()
@@ -113,11 +162,12 @@ def plot_powers(view):
     plt.tight_layout()
     return fig
 
-def plot_dominance(view):
-    fig = plt.figure(figsize=(10.5, 3.6))
+
+def plot_dominance(view: pd.DataFrame):
+    fig = plt.figure(figsize=(11.0, 3.6))
     plt.plot(view["Datetime"], view["Dominance"], label="Dominance")
     plt.axhline(0)
-    ex = view[view["Exitshort"]]
+    ex = view[view["ExitShort"]]
     if not ex.empty:
         plt.scatter(ex["Datetime"], ex["Dominance"], s=28, marker="x", label="Dom –→+")
     plt.title("Elder-Ray Power Dominance")
@@ -125,6 +175,7 @@ def plot_dominance(view):
     plt.xticks(rotation=25)
     plt.tight_layout()
     return fig
+
 
 # --------------------- Title ---------------------
 st.title("📈 Elder-Ray Power Dominance — Multi-Index")
@@ -140,19 +191,14 @@ if not tickers:
     st.stop()
 
 overview_rows = []
-details = {}  # ticker -> computed df (trimmed)
-
+details = {}   # ticker -> computed df (trimmed)
 errors = []
 
 for tk in tickers:
     try:
         raw = fetch_data(tk, interval)
-        # compute
         full = compute_elder_ray(raw, ema_period)
-        # keep only last N bars for plotting
         view = full.tail(int(bars_to_show)).copy()
-        # Normalize columns to lower-case to withstand case diffs later in plots
-        view.columns = [c.capitalize() if c != "Datetime" else c for c in view.columns]
         details[tk] = view
 
         last = view.iloc[-1]
@@ -160,11 +206,11 @@ for tk in tickers:
             "Ticker": tk,
             "Last Time": str(last["Datetime"]),
             "Last Price": float(last["Close"]),
-            "BullPower": float(last["Bullpower"]),
-            "BearPower": float(last["Bearpower"]),
+            "BullPower": float(last["BullPower"]),
+            "BearPower": float(last["BearPower"]),
             "Dominance": float(last["Dominance"]),
-            "Short Entry?": bool(last["Shortentry"]),
-            "Exit Short?": bool(last["Exitshort"]),
+            "Short Entry?": bool(last["ShortEntry"]),
+            "Exit Short?": bool(last["ExitShort"]),
         })
 
     except Exception as e:
@@ -173,14 +219,19 @@ for tk in tickers:
 # --------------------- Overview table (Option 3) ---------------------
 if overview_rows:
     ov = pd.DataFrame(overview_rows)
-    # nicer ordering
     ov = ov[["Ticker", "Last Time", "Last Price", "BullPower", "BearPower", "Dominance", "Short Entry?", "Exit Short?"]]
-    # simple highlight for dominance
-    def _fmt(x): 
-        return f"{x:.2f}" if isinstance(x, (int, float, np.floating)) else x
+
+    # Format numeric columns
+    def _fmt_num(x):
+        try:
+            return f"{float(x):.2f}"
+        except Exception:
+            return x
+
     show = ov.copy()
     for c in ["Last Price", "BullPower", "BearPower", "Dominance"]:
-        show[c] = show[c].map(_fmt)
+        show[c] = show[c].map(_fmt_num)
+
     st.subheader("Overview")
     st.dataframe(show, use_container_width=True)
 
@@ -194,21 +245,19 @@ if details:
     for (tk, tab) in zip(details.keys(), tabs):
         with tab:
             view = details[tk]
-            # Metrics
             last = view.iloc[-1]
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Last Price", f"{last['Close']:.2f}")
             m2.metric("Dominance", f"{last['Dominance']:.2f}")
-            m3.metric("Bear Power", f"{last['Bearpower']:.2f}")
-            m4.metric("Bull Power", f"{last['Bullpower']:.2f}")
+            m3.metric("Bear Power", f"{last['BearPower']:.2f}")
+            m4.metric("Bull Power", f"{last['BullPower']:.2f}")
 
-            # Charts
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.pyplot(plot_price(view, ema_period))
-                st.pyplot(plot_dominance(view))
+                fig = plot_price(view, ema_period);  st.pyplot(fig);  plt.close(fig)
+                fig = plot_dominance(view);          st.pyplot(fig);  plt.close(fig)
             with c2:
-                st.pyplot(plot_powers(view))
+                fig = plot_powers(view);             st.pyplot(fig);  plt.close(fig)
 
             with st.expander("Show latest rows"):
                 st.dataframe(view.tail(50), use_container_width=True)
@@ -218,5 +267,5 @@ if details:
                 data=view.to_csv(index=False).encode("utf-8"),
                 file_name=f"elder_ray_{tk.replace('^','')}_{interval}.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
             )
