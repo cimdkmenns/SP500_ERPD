@@ -1,12 +1,21 @@
 # FX scalp EA review and improved build
 
+> **Read `../backtest/ASSESSMENT.md` first.** The EA was replayed against a
+> broker-accurate engine after this review was written, and two claims below
+> were wrong: M5 is the wrong timeframe, and the realistic profit-factor range
+> quoted in section 5 was too optimistic. Sections 3 and 5 have been corrected
+> and the EA defaults changed to match (version 2.10). The verdict in section 1
+> was confirmed and is now quantified: the grid destroys 43% of accounts inside
+> two years.
+
 Folder layout
 
 | Path | What it is |
 | --- | --- |
 | `reference/DarkVenus_Reconstruction.mq5` | Reviewed as-is. Bollinger counter-trend grid with lot-sum doubling. |
 | `reference/SnapScalp_MR_v1.mq5` | Reviewed as-is. ATR-stretch mean reversion, one position, hard stop. |
-| `Experts/SnapScalp_MR_v2.mq5` | The improved EA. Copy this into `MQL5/Experts/` and compile in MetaEditor. |
+| `Experts/SnapScalp_MR_v2.mq5` | The improved EA, v2.10. Copy into `MQL5/Experts/` and compile in MetaEditor. |
+| `presets/*.set` | Per-pair input presets. Load in the Strategy Tester or on a chart. |
 
 ## 1. Verdict
 
@@ -74,21 +83,30 @@ Unchanged on purpose: hard stop on every trade, one position, no grid, no averag
 
 ## 3. Recommended settings per pair
 
-Leave `InpPreset = PRESET_AUTO`. The preset only sets the spread cap and the Tokyo session. Everything below is a starting point for the optimiser, not a tuned result.
+Leave `InpPreset = PRESET_AUTO`. The preset only sets the spread cap and the
+Tokyo session. Load `presets/SnapScalp_v2_<PAIR>_M30.set` for the rest. These
+are starting points for the optimiser, not tuned results.
 
 | Input | GBPUSD | EURUSD | USDJPY |
 | --- | --- | --- | --- |
-| Signal TF | M5 | M5 | M5 |
-| Stretch ATR | 1.30 to 1.50 | 1.20 to 1.30 | 1.20 to 1.40 |
+| Signal TF | M30 | M30 | M30 |
+| Entry model | Both | Both | Both |
+| Stretch ATR | 1.40 | 1.30 | 1.30 |
 | ADX max | 25 | 28 | 28 |
 | Bias mode | Try `BIAS_WITH_TREND` | `BIAS_NONE` | `BIAS_NONE` |
-| SL ATR | 1.60 | 1.50 | 1.60 |
-| Partial ATR | 0.60 | 0.50 | 0.60 |
+| SL ATR | 1.60 | 1.60 | 1.60 |
+| Partial ATR | 0.60 | 0.60 | 0.60 |
 | Time stop bars | 18 | 18 | 24 |
-| Risk % | 0.75 | 0.75 | 0.75 |
+| Risk % | 0.50 | 0.50 | 0.50 |
 | Sessions | London + NY | London + NY | Tokyo + London + NY |
 
-Use a separate magic number per chart.
+M30, not M5. Transaction cost per round turn is fixed in points and does not
+shrink on a faster timeframe, but the edge per trade does: measured cost was
+about 19 points on EURUSD and 23 on GBPUSD at every timeframe tested, against
+gross edge of roughly 5 points at M5 and 10 to 16 at M30. M5 loses on cost
+alone. See section 3 of the assessment.
+
+Use a separate magic number per chart. The presets already do this.
 
 ## 4. How to test properly
 
@@ -101,6 +119,26 @@ Use a separate magic number per chart.
 
 ## 5. What to expect
 
-Mean reversion on M5 majors is a high-frequency, small-edge business. Realistic outcomes after costs are a profit factor in the 1.2 to 1.5 range with a 55% to 65% win rate. The scale-out raises the win rate and lowers the average winner. A result far outside that range on a backtest is more likely a data or cost-model problem than a real edge.
+Corrected against the replay evidence.
 
-The equity guards will halt trading on bad days. That is the design. If the guards trip often in the backtest, the parameters are wrong for that pair or the spread model is too optimistic, and the answer is not to widen the guards.
+Mean reversion on FX majors is a small-edge business and the cost hurdle is the
+binding constraint. On the modelled tapes the strategy only reached a profit
+factor above 1.0 when **both** conditions held: a raw-spread account (about 0.3
+pip plus 6 per lot) **and** a tape with substantial short-horizon mean
+reversion. Under those conditions it returned 1 to 3 percent a year at a 5 to 6
+percent drawdown, with a 74 to 75 percent win rate and roughly 170 to 200 trades
+a year.
+
+At a 1.0 pip spread with 7 per lot commission it did not reach a profit factor
+of 1.0 under any tested configuration. Treat any backtest of this EA that shows
+a profit factor much above 1.3 on M5 with deep suspicion: check the spread model
+and the commission first, because that is almost always where such a result
+comes from.
+
+The highest-value change available is not a parameter. It is lower execution
+cost. Cutting the round turn from 18.9 to 11.9 points moved the profit factor
+from 0.82 to 1.05, which is more than any signal change tested achieved.
+
+The equity guards will halt trading on bad days, and that is the design. If the
+guards trip often, the parameters are wrong for that pair or the spread model is
+too optimistic. The answer is never to widen the guards.

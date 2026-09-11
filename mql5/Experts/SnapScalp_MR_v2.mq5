@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                              SnapScalp_MR_v2.mq5 |
 //|   Mean-reversion intraday scalper for FX majors                  |
-//|   GBPUSD / EURUSD / USDJPY  -  M5 (M15 acceptable)               |
+//|   GBPUSD / EURUSD / USDJPY  -  M30 (see the note on timeframe)   |
 //|                                                                  |
 //|   v2 versus SnapScalp_MR v1                                      |
 //|                                                                  |
@@ -36,9 +36,22 @@
 //|       averaging. Size from stop distance, never from history.    |
 //|     * Three independent equity guards that can flatten and       |
 //|       disable the EA.                                            |
+//|                                                                  |
+//|   TIMEFRAME NOTE (v2.10, from the replay in ../backtest)          |
+//|                                                                  |
+//|   Transaction cost per round turn is fixed in points: it does    |
+//|   not shrink when you drop to a faster timeframe, but the edge   |
+//|   available per trade does. Measured on replayed tapes, cost is  |
+//|   about 19 points on EURUSD and 23 on GBPUSD at a 1 pip spread   |
+//|   with 7 per lot commission, at EVERY timeframe, while gross     |
+//|   edge per trade grew from roughly 5 points at M5 to 10-16 at    |
+//|   M30. M5 therefore loses on cost alone. The default signal      |
+//|   timeframe is M30 for that reason, and the single biggest       |
+//|   improvement available is a lower-cost account, not a better    |
+//|   signal. Read backtest/ASSESSMENT.md before changing this.      |
 //+------------------------------------------------------------------+
 #property copyright "Private use"
-#property version   "2.00"
+#property version   "2.10"
 #property description "Session-filtered mean reversion scalper for GBPUSD / EURUSD / USDJPY."
 #property description "Two bounded entry models, scale-out exits, anti-martingale sizing, layered equity guards."
 
@@ -92,7 +105,7 @@ input group "=== Symbol preset ==="
 input ENUM_SYMBOL_PRESET InpPreset              = PRESET_AUTO; // Preset (overrides spread cap and session 3)
 
 input group "=== Signal: common ==="
-input ENUM_TIMEFRAMES    InpSignalTF            = PERIOD_M5;   // Signal timeframe
+input ENUM_TIMEFRAMES    InpSignalTF            = PERIOD_M30;  // Signal timeframe (see header note)
 input ENUM_TIMEFRAMES    InpRegimeTF            = PERIOD_H1;   // Regime / bias timeframe
 input ENUM_ENTRY_MODEL   InpEntryModel          = MODEL_BOTH;  // Entry model(s)
 input int                InpEmaPeriod           = 20;          // Anchor EMA period (signal TF)
@@ -142,13 +155,13 @@ input double             InpMinTPtoCostRatio    = 2.50;        // Final target m
 input int                InpSlippagePts         = 10;          // Max deviation (points)
 
 input group "=== Risk ==="
-input double             InpRiskPercent         = 0.75;        // Base risk per trade, % of equity
+input double             InpRiskPercent         = 0.50;        // Base risk per trade, % of equity
 input double             InpMaxLots             = 5.00;        // Hard lot ceiling
 input int                InpLossesToReduce      = 2;           // Consecutive losses before risk is cut (0 = off)
 input double             InpRiskMultAfterLoss   = 0.50;        // Risk multiplier while in a loss streak
 input int                InpWinsToBoost         = 3;           // Consecutive wins before risk is raised (0 = off)
 input double             InpRiskMultAfterWin    = 1.25;        // Risk multiplier while in a win streak
-input int                InpMaxTradesPerDay     = 8;           // Max entries per day (0 = unlimited)
+input int                InpMaxTradesPerDay     = 4;           // Max entries per day (0 = unlimited)
 input int                InpMinBarsBetweenTrades = 1;          // Bars that must pass after an exit before re-entry
 input double             InpDailyLossPct        = 2.00;        // Daily loss halt, % of day-start equity
 input double             InpWeeklyLossPct       = 4.00;        // Weekly loss halt, % of week-start equity
