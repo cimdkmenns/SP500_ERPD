@@ -366,6 +366,58 @@ trade between the top two candidates before settling.
 Judge the sweep on **expectancy per trade**, not total net profit — total
 profit rewards whichever pass happened to take the most trades.
 
+## Result: the short side is what loses (8 months, M5, H1 anchor, 91 trades)
+
+With every input restored to the frozen values the EA took 91 trades, up from
+26. Net -255.50, profit factor 0.86, max drawdown 54%. Splitting it by
+direction (shorts carry `InpShortRiskMultiplier` 0.5, so their money values
+are ~half a long's; the reconstruction below reproduces the reported net to
+the cent, which is what makes the split trustworthy):
+
+| | Trades | Win rate | Net | PF |
+| --- | --- | --- | --- | --- |
+| Longs | 31 | 38.7% | **+457** | **1.60** |
+| Shorts | 60 | 11.7% | **-713** | **0.33** |
+| Combined | 91 | 20.9% | -256 | 0.86 |
+
+Blended payoff is 3.26, so break-even is a 23.5% win rate. Longs clear it,
+shorts are nowhere near it. Both results are significant at 5% against a
+break-even null (shorts p=0.017, longs p=0.042), though with two tests on one
+dataset the long result is borderline and the short result is the solid one.
+
+This is the frozen model's own thesis taken one step further, not a new idea
+fitted to the data. That model already halves short risk
+(`InpShortRiskMultiplier` 0.5), trails only shorts (`InpProtectLongs` false),
+and cuts only losing shorts on an anchor reversal (`InpCutLosingLongs`
+false). Every one of those says shorts are the weak side on this instrument.
+On M5 they are not merely weak, they are negative.
+
+There is a mechanism behind it. The earlier log counted 754 bear setups
+against 503 bull setups: in an uptrend, higher highs on fading momentum print
+constantly, so the strategy generates its *most* signals on the side fighting
+the drift.
+
+**Caveat that matters: 8 months of NAS100 in an uptrend will punish shorts no
+matter what the strategy does.** Before concluding that long-only is the
+answer, re-run over a window containing a genuine NAS100 correction. If
+long-only still holds there, it is a property of the strategy. If it collapses,
+it was a property of the period.
+
+## Risk: 8% is not survivable here
+
+The run contained **20 consecutive losses**. Applied to 1R losses:
+
+| Risk per trade | Equity after 20 straight losses |
+| --- | --- |
+| 8% (frozen) | 19% left |
+| 4% | 44% left |
+| 2% | 67% left |
+| 1% | 82% left |
+
+The observed 54% drawdown was cushioned by shorts being half-sized and by the
+drawdown throttle engaging. The frozen 8% was validated at M30 frequency; at
+this trade count and streak length it is a different proposition.
+
 ## Testing notes
 
 1. Model **Every tick based on real ticks**. M1 OHLC modelling is meaningless
