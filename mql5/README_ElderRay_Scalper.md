@@ -15,11 +15,22 @@ original EA. To run the diagnostic:
 2. Compile it in MetaEditor (F7).
 3. Strategy Tester: symbol NAS100, period **M5**, model **Every tick
    based on real ticks**, 6–12 months.
-4. Press Start. **Do not touch the Inputs tab.**
+4. Inputs tab → **Load** → `ElderRay_Scalper_baseline.set`. **This step is
+   required, not optional.**
 
-The `.set` files are optional. `ElderRay_Scalper_baseline.set` is provided
-only for resetting after experimenting — loading it changes nothing on a
-fresh compile. Presets live in `<MT5 data folder>\MQL5\Presets\`.
+> **MT5 remembers the last inputs you used for an EA, per EA name, and
+> recompiling does NOT reset them to the new defaults.** An earlier run of
+> this EA was demonstrably executed against inputs from a previous build: the
+> exit log contained `session end` and `maximum holding period` exits, and
+> both of those routes are unreachable when `InpUseEntrySession=false` and
+> `InpMaxHoldingBars=0`, which are the shipped defaults. Always load the
+> preset before a run whose numbers you intend to trust.
+
+Copy `ElderRay_Scalper_baseline.set` into
+`<MT5 data folder>\MQL5\Presets\` so it appears in the Load dialog.
+
+Sanity check after any run: if the exit-route table lists `session end` or
+`maximum holding period`, you were not running the baseline.
 
 The single run reports which anchor timeframe you should be using, so
 there is no anchor sweep to set up by hand.

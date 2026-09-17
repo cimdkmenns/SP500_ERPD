@@ -188,10 +188,14 @@ long exitReasonCount[ER_MAX_EXIT_REASONS];
 double exitReasonSumR[ER_MAX_EXIT_REASONS];
 int exitReasonsUsed = 0;
 
-// One position at a time, so a single slot tracks the open trade.
-double openRiskMoney = 0.0;
-bool openStopWasTrailed = false;
-string pendingCloseReason = "";
+// Per-position exit accounting. A single global was fragile: a reversal
+// closes and opens inside one tick, and OnTradeTransaction is not guaranteed
+// to run before the next assignment, so state is keyed to the position id.
+#define ER_TRACK_SLOTS 8
+long   trackPositionId[ER_TRACK_SLOTS];
+double trackRiskMoney[ER_TRACK_SLOTS];
+string trackReason[ER_TRACK_SLOTS];
+bool   trackTrailed[ER_TRACK_SLOTS];
 long bullSetupsConfirmed = 0;
 long bearSetupsConfirmed = 0;
 long entriesOpened = 0;
@@ -294,9 +298,13 @@ int OnInit()
    ArrayInitialize(exitReasonCount, 0);
    ArrayInitialize(exitReasonSumR, 0.0);
    exitReasonsUsed = 0;
-   openRiskMoney = 0.0;
-   openStopWasTrailed = false;
-   pendingCloseReason = "";
+   for(int slot = 0; slot < ER_TRACK_SLOTS; slot++)
+   {
+      trackPositionId[slot] = 0;
+      trackRiskMoney[slot] = 0.0;
+      trackReason[slot] = "";
+      trackTrailed[slot] = false;
+   }
    bullSetupsConfirmed = 0;
    bearSetupsConfirmed = 0;
    entriesOpened = 0;
@@ -1516,19 +1524,22 @@ bool ExecuteConfirmedDirection(ENUM_POSITION_TYPE desiredType,
       return false;
    }
 
-   // Cache this trade's money risk so every exit can be reported in R.
+   // Cache this trade's money risk against its position id, so every exit is
+   // reportable in R even when a reversal closes and opens in the same tick.
    double filledPrice = trade.ResultPrice() > 0.0 ? trade.ResultPrice()
                                                   : entryPrice;
    double riskAtEntry = 0.0;
    ENUM_ORDER_TYPE filledType = desiredType == POSITION_TYPE_BUY
                                 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   if(OrderCalcProfit(filledType, _Symbol, tradeVolume, filledPrice,
+   long openedId = 0;
+   if(HistoryDealSelect(trade.ResultDeal()))
+      openedId = (long)HistoryDealGetInteger(trade.ResultDeal(),
+                                             DEAL_POSITION_ID);
+   int openedSlot = TrackSlot(openedId, true);
+   if(openedSlot >= 0 &&
+      OrderCalcProfit(filledType, _Symbol, tradeVolume, filledPrice,
                       stopLoss, riskAtEntry))
-      openRiskMoney = MathAbs(riskAtEntry);
-   else
-      openRiskMoney = 0.0;
-   openStopWasTrailed = false;
-   pendingCloseReason = "";
+      trackRiskMoney[openedSlot] = MathAbs(riskAtEntry);
 
    PrintFormat("%s opened: order %I64u, deal %I64u, price %.5f, "
                "SL %.5f, TP %.5f, volume %.2f",
@@ -1761,7 +1772,12 @@ void ApplyTrailingAtClosedBar(int closedShift)
          PrintFormat("Trailing stop failed: %u %s", trade.ResultRetcode(),
                      trade.ResultRetcodeDescription());
       else
-         openStopWasTrailed = true;
+      {
+         int trailSlot = TrackSlot((long)PositionGetInteger(POSITION_IDENTIFIER),
+                                   true);
+         if(trailSlot >= 0)
+            trackTrailed[trailSlot] = true;
+      }
    }
 }
 
@@ -1798,10 +1814,6 @@ void CutLosingAnchorReversals(int closedShift, int anchorTrend)
 bool CloseManagedPositions(ENUM_POSITION_TYPE typeToClose,
                            string closureReason)
 {
-   // Read back by OnTradeTransaction to attribute the exit. A broker-side
-   // stop or target leaves this empty and is classified from the result.
-   if(HasManagedPosition(typeToClose))
-      pendingCloseReason = closureReason;
    bool allClosed = true;
    for(int index = PositionsTotal() - 1; index >= 0; index--)
    {
@@ -1810,6 +1822,13 @@ bool CloseManagedPositions(ENUM_POSITION_TYPE typeToClose,
          (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber ||
          (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != typeToClose)
          continue;
+
+      // Recorded before the close so OnTradeTransaction can attribute it. A
+      // broker-side stop or target leaves it empty and is classified there.
+      int closingSlot = TrackSlot((long)PositionGetInteger(POSITION_IDENTIFIER),
+                                  true);
+      if(closingSlot >= 0)
+         trackReason[closingSlot] = closureReason;
 
       if(!trade.PositionClose(ticket, InpDeviationPoints) ||
          trade.ResultRetcode() != TRADE_RETCODE_DONE ||
@@ -1826,6 +1845,39 @@ bool CloseManagedPositions(ENUM_POSITION_TYPE typeToClose,
       }
    }
    return allClosed;
+}
+
+//+------------------------------------------------------------------+
+int TrackSlot(long positionId, bool createIfMissing)
+{
+   if(positionId == 0)
+      return -1;
+   for(int slot = 0; slot < ER_TRACK_SLOTS; slot++)
+      if(trackPositionId[slot] == positionId)
+         return slot;
+   if(!createIfMissing)
+      return -1;
+   for(int slot = 0; slot < ER_TRACK_SLOTS; slot++)
+      if(trackPositionId[slot] == 0)
+      {
+         trackPositionId[slot] = positionId;
+         trackRiskMoney[slot] = 0.0;
+         trackReason[slot] = "";
+         trackTrailed[slot] = false;
+         return slot;
+      }
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+void ReleaseTrackSlot(int slot)
+{
+   if(slot < 0)
+      return;
+   trackPositionId[slot] = 0;
+   trackRiskMoney[slot] = 0.0;
+   trackReason[slot] = "";
+   trackTrailed[slot] = false;
 }
 
 //+------------------------------------------------------------------+
@@ -1870,10 +1922,15 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                       HistoryDealGetDouble(trans.deal, DEAL_SWAP) +
                       HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
 
-   string reason = pendingCloseReason;
+   long positionId = (long)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+   int slot = TrackSlot(positionId, false);
+   string reason = slot >= 0 ? trackReason[slot] : "";
+   bool trailed = slot >= 0 ? trackTrailed[slot] : false;
+   double risk = slot >= 0 ? trackRiskMoney[slot] : 0.0;
+
    if(reason == "")
    {
-      if(openStopWasTrailed && netResult > 0.0)
+      if(trailed && netResult > 0.0)
          reason = "trailing stop";
       else if(netResult > 0.0)
          reason = "take profit hit";
@@ -1881,12 +1938,8 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          reason = "stop loss hit";
    }
 
-   double rMultiple = openRiskMoney > 0.0 ? netResult / openRiskMoney : 0.0;
-   RecordExit(reason, rMultiple);
-
-   pendingCloseReason = "";
-   openStopWasTrailed = false;
-   openRiskMoney = 0.0;
+   RecordExit(reason, risk > 0.0 ? netResult / risk : 0.0);
+   ReleaseTrackSlot(slot);
 }
 
 //+------------------------------------------------------------------+
