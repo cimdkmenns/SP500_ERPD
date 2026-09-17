@@ -399,6 +399,12 @@ int OnInit()
    trade.SetAsyncMode(false);
    trade.SetTypeFillingBySymbol(_Symbol);
 
+   // Under Wine on macOS the data folder is buried inside the bottle and the
+   // File > Open Data Folder menu often cannot open it. Print it instead.
+   PrintFormat("MT5 data folder (put the EA in MQL5\\Experts, presets in "
+               "MQL5\\Presets): %s",
+               TerminalInfoString(TERMINAL_DATA_PATH));
+
    PrintFormat("Elder-Ray scalper initialized on %s with %s anchor. "
                "Exit mode %d, stop mode %d, risk sizing %s.",
                EnumToString(tradeTF), EnumToString(anchorTF),

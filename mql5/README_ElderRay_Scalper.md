@@ -29,6 +29,46 @@ original EA. To run the diagnostic:
 Copy `ElderRay_Scalper_baseline.set` into
 `<MT5 data folder>\MQL5\Presets\` so it appears in the Load dialog.
 
+### macOS + Wine: finding the data folder
+
+`File → Open Data Folder` usually cannot open anything under Wine. Two ways
+round it:
+
+**The EA tells you.** On every run its first Journal line prints the folder:
+
+```
+MT5 data folder (put the EA in MQL5\Experts, presets in MQL5\Presets):
+C:\users\you\AppData\Roaming\MetaQuotes\Terminal\<hash>
+```
+
+**Or let the script find it.** From the folder holding these files:
+
+```sh
+chmod +x install_mac_wine.sh
+./install_mac_wine.sh --dry-run   # show what it found and would do
+./install_mac_wine.sh             # install after confirming
+```
+
+It searches the usual bottle locations, installs the EA into `MQL5/Experts`
+and both presets into `MQL5/Presets`, and renames any existing file to
+`*.bak-<timestamp>` rather than overwriting it. If your bottle lives
+somewhere unusual, point it there with `--root "/path/to/bottle"`.
+
+Roots it searches, which are also the paths to look in by hand:
+
+| Install method | Prefix root |
+| --- | --- |
+| MetaQuotes MT5 for Mac | `~/Library/Application Support/net.metaquotes.wine.metatrader5` |
+| CrossOver | `~/Library/Application Support/CrossOver/Bottles` |
+| PlayOnMac | `~/Library/PlayOnMac/wineprefix` |
+| Whisky | `~/Library/Containers/com.isaacmarovitz.Whisky/Bottles` |
+| Wineskin wrapper | `~/Applications/<Name>.app/Contents/SharedSupport/prefix` |
+| Plain Wine | `~/.wine` |
+
+Inside a prefix the data folder is normally
+`drive_c/users/<user>/AppData/Roaming/MetaQuotes/Terminal/<32-char hash>/`,
+or `drive_c/Program Files/MetaTrader 5/` for a portable install.
+
 Sanity check after any run: if the exit-route table lists `session end` or
 `maximum holding period`, you were not running the baseline.
 
