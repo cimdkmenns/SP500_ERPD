@@ -90,7 +90,11 @@ input ER_EXIT_MODE        InpExitMode                   = ER_EXIT_OPPOSITE_CONFI
 input ER_STOP_MODE        InpStopMode                   = ER_STOP_TF_ATR;
 input double              InpStopATRMultiplier          = 2.0;
 input double              InpPivotStopBufferATR         = 0.20;
-input double              InpTakeProfitR                = 2.0;
+// The frozen model's edge lives in its tail: ~35-40% of trades win, and they
+// must pay 4x a loser. Cutting this to 2.0R "for scalping realism" produced a
+// 0.93 payoff ratio needing a 51.7% win rate - unreachable for this setup.
+// Back at the frozen value; the stop stays at the tighter scalping 2.0 x ATR.
+input double              InpTakeProfitR                = 4.0;
 // Break-even at 1.0R against a 2.0R target converts half the winning
 // distribution into +0.1R scratches while losers still run the full -1R.
 // Off, as in the frozen model; the trail does the protecting. Session-end
@@ -98,10 +102,8 @@ input double              InpTakeProfitR                = 2.0;
 input int                 InpMaxHoldingBars             = 0;
 input double              InpBreakEvenAtR               = 0.0;
 input double              InpBreakEvenOffsetR           = 0.0;
-// Frozen model trailed from 75% of target at 25% of target. Held to that
-// ratio against the scalper's 2.0R target.
-input double              InpTrailStartR                = 1.5;
-input double              InpTrailDistanceR             = 0.50;
+input double              InpTrailStartR                = 3.0;
+input double              InpTrailDistanceR             = 1.00;
 input bool                InpProtectLongs               = false;
 input bool                InpProtectShorts              = true;
 input bool                InpAdaptiveProtection         = false;
@@ -184,7 +186,18 @@ enum ER_BLOCK_REASON
    ER_BLOCK_REASON_COUNT
 };
 
+#define ER_MAX_EXIT_REASONS 16
+
 long blockCounts[ER_BLOCK_REASON_COUNT];
+string exitReasonName[ER_MAX_EXIT_REASONS];
+long exitReasonCount[ER_MAX_EXIT_REASONS];
+double exitReasonSumR[ER_MAX_EXIT_REASONS];
+int exitReasonsUsed = 0;
+
+// One position at a time, so a single slot tracks the open trade.
+double openRiskMoney = 0.0;
+bool openStopWasTrailed = false;
+string pendingCloseReason = "";
 long bullSetupsConfirmed = 0;
 long bearSetupsConfirmed = 0;
 long entriesOpened = 0;
@@ -272,6 +285,12 @@ int OnInit()
    tradesToday = 0;
    dailyLossStopHit = false;
    ArrayInitialize(blockCounts, 0);
+   ArrayInitialize(exitReasonCount, 0);
+   ArrayInitialize(exitReasonSumR, 0.0);
+   exitReasonsUsed = 0;
+   openRiskMoney = 0.0;
+   openStopWasTrailed = false;
+   pendingCloseReason = "";
    bullSetupsConfirmed = 0;
    bearSetupsConfirmed = 0;
    entriesOpened = 0;
@@ -804,6 +823,32 @@ void PrintFilterStatistics()
    }
    Print("A gate holding a large share is the one to question first. A gate "
          "at 0% is doing nothing and can be ruled out as the cause.");
+
+   if(exitReasonsUsed <= 0)
+      return;
+
+   long exitTotal = 0;
+   double sumR = 0.0;
+   for(int index = 0; index < exitReasonsUsed; index++)
+   {
+      exitTotal += exitReasonCount[index];
+      sumR += exitReasonSumR[index];
+   }
+   Print("--- exit routes (average R by how the trade ended) ---");
+   for(int index = 0; index < exitReasonsUsed; index++)
+   {
+      if(exitReasonCount[index] <= 0)
+         continue;
+      PrintFormat("  %-34s %5I64d trades  avg %+6.2fR  total %+7.2fR",
+                  exitReasonName[index], exitReasonCount[index],
+                  exitReasonSumR[index] / exitReasonCount[index],
+                  exitReasonSumR[index]);
+   }
+   if(exitTotal > 0)
+      PrintFormat("  %-34s %5I64d trades  avg %+6.2fR  total %+7.2fR",
+                  "ALL", exitTotal, sumR / exitTotal, sumR);
+   Print("An exit route with a large count and a small positive average is "
+         "cutting winners before the target pays for the losers.");
 }
 
 //+------------------------------------------------------------------+
@@ -1335,6 +1380,20 @@ bool ExecuteConfirmedDirection(ENUM_POSITION_TYPE desiredType,
       return false;
    }
 
+   // Cache this trade's money risk so every exit can be reported in R.
+   double filledPrice = trade.ResultPrice() > 0.0 ? trade.ResultPrice()
+                                                  : entryPrice;
+   double riskAtEntry = 0.0;
+   ENUM_ORDER_TYPE filledType = desiredType == POSITION_TYPE_BUY
+                                ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcProfit(filledType, _Symbol, tradeVolume, filledPrice,
+                      stopLoss, riskAtEntry))
+      openRiskMoney = MathAbs(riskAtEntry);
+   else
+      openRiskMoney = 0.0;
+   openStopWasTrailed = false;
+   pendingCloseReason = "";
+
    PrintFormat("%s opened: order %I64u, deal %I64u, price %.5f, "
                "SL %.5f, TP %.5f, volume %.2f",
                desiredType == POSITION_TYPE_BUY ? "BUY" : "SELL",
@@ -1558,11 +1617,15 @@ void ApplyTrailingAtClosedBar(int closedShift)
       double current = SymbolInfoDouble(_Symbol, isBuy ? SYMBOL_BID : SYMBOL_ASK);
       bool valid = isBuy ? newSL < current - minDistance && (sl == 0.0 || newSL > sl + tickSize / 2)
                          : newSL > current + minDistance && (sl == 0.0 || newSL < sl - tickSize / 2);
-      if(valid && (!trade.PositionModify(ticket, newSL, tp) ||
-                   (trade.ResultRetcode() != TRADE_RETCODE_DONE &&
-                    trade.ResultRetcode() != TRADE_RETCODE_NO_CHANGES)))
+      if(!valid)
+         continue;
+      if(!trade.PositionModify(ticket, newSL, tp) ||
+         (trade.ResultRetcode() != TRADE_RETCODE_DONE &&
+          trade.ResultRetcode() != TRADE_RETCODE_NO_CHANGES))
          PrintFormat("Trailing stop failed: %u %s", trade.ResultRetcode(),
                      trade.ResultRetcodeDescription());
+      else
+         openStopWasTrailed = true;
    }
 }
 
@@ -1599,6 +1662,10 @@ void CutLosingAnchorReversals(int closedShift, int anchorTrend)
 bool CloseManagedPositions(ENUM_POSITION_TYPE typeToClose,
                            string closureReason)
 {
+   // Read back by OnTradeTransaction to attribute the exit. A broker-side
+   // stop or target leaves this empty and is classified from the result.
+   if(HasManagedPosition(typeToClose))
+      pendingCloseReason = closureReason;
    bool allClosed = true;
    for(int index = PositionsTotal() - 1; index >= 0; index--)
    {
@@ -1623,6 +1690,67 @@ bool CloseManagedPositions(ENUM_POSITION_TYPE typeToClose,
       }
    }
    return allClosed;
+}
+
+//+------------------------------------------------------------------+
+void RecordExit(string reason, double rMultiple)
+{
+   int slot = -1;
+   for(int index = 0; index < exitReasonsUsed; index++)
+      if(exitReasonName[index] == reason)
+      {
+         slot = index;
+         break;
+      }
+   if(slot < 0)
+   {
+      if(exitReasonsUsed >= ER_MAX_EXIT_REASONS)
+         return;
+      slot = exitReasonsUsed++;
+      exitReasonName[slot] = reason;
+   }
+   exitReasonCount[slot]++;
+   exitReasonSumR[slot] += rMultiple;
+}
+
+//+------------------------------------------------------------------+
+// Every closing deal is attributed to an exit route and converted to R, so
+// the journal shows where the money actually goes rather than only a total.
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD || trans.deal == 0)
+      return;
+   if(!HistoryDealSelect(trans.deal))
+      return;
+   if((ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagicNumber ||
+      HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol ||
+      (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY) !=
+      DEAL_ENTRY_OUT)
+      return;
+
+   double netResult = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) +
+                      HistoryDealGetDouble(trans.deal, DEAL_SWAP) +
+                      HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+
+   string reason = pendingCloseReason;
+   if(reason == "")
+   {
+      if(openStopWasTrailed && netResult > 0.0)
+         reason = "trailing stop";
+      else if(netResult > 0.0)
+         reason = "take profit hit";
+      else
+         reason = "stop loss hit";
+   }
+
+   double rMultiple = openRiskMoney > 0.0 ? netResult / openRiskMoney : 0.0;
+   RecordExit(reason, rMultiple);
+
+   pendingCloseReason = "";
+   openStopWasTrailed = false;
+   openRiskMoney = 0.0;
 }
 
 //+------------------------------------------------------------------+

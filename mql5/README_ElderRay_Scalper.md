@@ -109,6 +109,80 @@ gate sitting at 0% can be ruled out entirely. This is the number to bring to
 the next tuning conversation — it is far more informative than a P&L curve
 built on a handful of trades.
 
+## Note on the second backtest (8 months, M5, 26 trades)
+
+The exit fix worked. Profit factor moved 0.03 → 0.58, the win rate is a
+normal-looking 38.5%, and winners now average about the same size as losers
+instead of scratching at +0.16R. But the run still lost money, for a reason
+that is arithmetic rather than bad luck.
+
+**The 2.0R target was the mistake.** Average win 0.86R against average loss
+0.92R is a payoff ratio of 0.93, which needs a **51.7% win rate** to break
+even. The largest winner in 8 months was 1.94R — exactly the target, capped.
+The frozen model does not work by winning often; it wins ~35-40% of the time
+and needs those winners to pay **4x** a loser. Halving the target to 2.0R for
+"scalping realism" removed the tail the entire edge depends on.
+
+The target is therefore back at the frozen 4.0R, with the trail back at 3.0R
+start / 1.0R distance. The stop stays at the tighter scalping 2.0 × ATR, so a
+4R target is 8 × ATR(M5) — on NAS100 roughly 120–160 index points, which is a
+reachable cash-session move rather than a swing-sized one.
+
+This is a genuine trade-off, not a free win: a more distant target will lower
+the hit rate. Break-even is 33.3% at a 2:1 payoff and 25% at 3:1, against
+38.5% observed at a 1:1 payoff. Whether the hit rate holds up far enough is
+the thing the next run has to answer.
+
+**26 trades still cannot condemn the strategy.** P(≤10 wins of 26 | true rate
+= break-even) = 0.12. That is not significant at 95%.
+
+## The frequency problem is still unsolved
+
+0.15 trades/day over 8 months is a swing rate, not a scalping rate, and it is
+the thing blocking every other question — you cannot measure a 38% win rate
+properly at 26 trades.
+
+**The prime suspect is the session filter.** The frozen model ran 24 hours a
+day. The scalper gates entries to 13:00–21:00 GMT, which is 8 hours of 24 and
+should on its own cut trade count by roughly two thirds. That is a deliberate
+cost-control trade, and it is now competing directly with sample size.
+
+Do not guess at this — the EA counts it. Run once and read the two tables it
+prints at the end, then sweep this grid in the optimizer, judging on
+**expectancy per trade**, not total net profit:
+
+| Input | Values to test | Why |
+| --- | --- | --- |
+| `InpUseEntrySession` | true / false | Largest single frequency lever |
+| `InpRequireEntryDominance` | true / false | Rarely true within 4 bars of a pivot |
+| `InpEntrySetupExpiryBars` | 4 / 8 / 16 | 4 bars is 20 min here vs 2 h in the M30 model |
+| `InpAnchorTimeframe` | M15 / M30 | A faster anchor agrees more often |
+
+Be prepared for one honest outcome: the filter statistics may show that an
+Elder-Ray divergence confirmed by a higher-timeframe trend is simply a **rare
+structure on M5**, and that relaxing the gates enough to get scalping
+frequency also removes what makes the setup work. If that is what the numbers
+say, the conclusion is that this strategy's edge lives at M30 and the right
+move is to trade it there rather than to force it onto a 5-minute chart.
+
+## Exit-route reporting
+
+Alongside the filter statistics the EA now attributes every closing deal to
+how the trade ended and converts it to R:
+
+```
+--- exit routes (average R by how the trade ended) ---
+  stop loss hit                         16 trades  avg  -1.00R  total -16.00R
+  take profit hit                        4 trades  avg  +4.00R  total +16.00R
+  trailing stop                          5 trades  avg  +1.85R  total  +9.25R
+  session end                            6 trades  avg  +0.20R  total  +1.20R
+  ALL                                   31 trades  avg  +0.34R  total +10.45R
+```
+
+A route with a large count and a small positive average is cutting winners
+before the target can pay for the losers — that is precisely how the 2.0R
+target and the old break-even rule were losing money invisibly.
+
 ## Before you trust a backtest
 
 1. Model **Every tick based on real ticks**. M1 OHLC modelling is meaningless at
