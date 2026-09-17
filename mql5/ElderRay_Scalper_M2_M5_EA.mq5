@@ -17,11 +17,11 @@
 
 enum ER_ANCHOR_TF
 {
-   ER_ANCHOR_AUTO = 0,   // Auto (about 6x the trade timeframe)
-   ER_ANCHOR_M15  = 15,
-   ER_ANCHOR_M30  = 30,
-   ER_ANCHOR_H1   = 60,
-   ER_ANCHOR_H4   = 240
+   ER_ANCHOR_AUTO = 0,   // Auto (targets the frozen model's 8x ratio)
+   ER_ANCHOR_M15  = 1,
+   ER_ANCHOR_M30  = 2,
+   ER_ANCHOR_H1   = 3,
+   ER_ANCHOR_H4   = 4
 };
 
 enum ER_EXIT_MODE
@@ -198,6 +198,16 @@ long entriesOpened = 0;
 long setupsExpiredUnused = 0;
 long setupsInvalidated = 0;
 
+// Anchor survey: at every live setup-bar, ask each candidate anchor whether
+// it WOULD have supported the trade. One backtest then answers which anchor
+// timeframe to use, instead of one backtest per candidate.
+#define ER_SURVEY_COUNT 4
+ENUM_TIMEFRAMES surveyTF[ER_SURVEY_COUNT];
+int surveyEMAHandle[ER_SURVEY_COUNT];
+int surveyATRHandle[ER_SURVEY_COUNT];
+long surveyPass[ER_SURVEY_COUNT];
+long surveyTotal[ER_SURVEY_COUNT];
+
 CTrade trade;
 double riskBalancePeak = 0.0;
 bool drawdownThrottled = false;
@@ -292,6 +302,14 @@ int OnInit()
    entriesOpened = 0;
    setupsExpiredUnused = 0;
    setupsInvalidated = 0;
+   surveyTF[0] = PERIOD_M15;
+   surveyTF[1] = PERIOD_M30;
+   surveyTF[2] = PERIOD_H1;
+   surveyTF[3] = PERIOD_H4;
+   ArrayInitialize(surveyPass, 0);
+   ArrayInitialize(surveyTotal, 0);
+   ArrayInitialize(surveyEMAHandle, INVALID_HANDLE);
+   ArrayInitialize(surveyATRHandle, INVALID_HANDLE);
 
    if(InpEMAPeriod < 2 || InpAnchorATRPeriod < 2 ||
       InpAnchorNeutralZoneATR < 0.0 || InpTradeATRPeriod < 2 ||
@@ -353,6 +371,19 @@ int OnInit()
       PrintFormat("Unable to create indicator handles. Error %d", GetLastError());
       ReleaseHandles();
       return INIT_FAILED;
+   }
+
+   if(InpLogFilterStats)
+   {
+      for(int index = 0; index < ER_SURVEY_COUNT; index++)
+      {
+         if(PeriodSeconds(surveyTF[index]) <= tradeTFSeconds)
+            continue;
+         surveyEMAHandle[index] = iMA(_Symbol, surveyTF[index], InpEMAPeriod,
+                                      0, MODE_EMA, InpAppliedPrice);
+         surveyATRHandle[index] = iATR(_Symbol, surveyTF[index],
+                                       InpAnchorATRPeriod);
+      }
    }
 
    trade.SetExpertMagicNumber(InpMagicNumber);
@@ -479,6 +510,16 @@ void ReleaseHandles()
    anchorEMAHandle = INVALID_HANDLE;
    anchorATRHandle = INVALID_HANDLE;
    anchorADXHandle = INVALID_HANDLE;
+
+   for(int index = 0; index < ER_SURVEY_COUNT; index++)
+   {
+      if(surveyEMAHandle[index] != INVALID_HANDLE)
+         IndicatorRelease(surveyEMAHandle[index]);
+      if(surveyATRHandle[index] != INVALID_HANDLE)
+         IndicatorRelease(surveyATRHandle[index]);
+      surveyEMAHandle[index] = INVALID_HANDLE;
+      surveyATRHandle[index] = INVALID_HANDLE;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -752,6 +793,7 @@ int EvaluateEntryBlock(ENUM_POSITION_TYPE desiredType,
       return ER_BLOCK_AFTER_POTENTIAL_EXIT;
 
    int desiredTrend = isLong ? ANCHOR_TREND_BULL : ANCHOR_TREND_BEAR;
+   SurveyAnchors(closedBarTime, desiredTrend);
    if(anchorTrend != desiredTrend)
       return ER_BLOCK_ANCHOR_TREND;
    if(!AnchorSlopeSupports(closedBarTime, desiredTrend))
@@ -831,6 +873,28 @@ void PrintFilterStatistics()
    }
    Print("A gate holding a large share is the one to question first. A gate "
          "at 0% is doing nothing and can be ruled out as the cause.");
+
+   long surveyBase = 0;
+   for(int index = 0; index < ER_SURVEY_COUNT; index++)
+      surveyBase = MathMax(surveyBase, surveyTotal[index]);
+   if(surveyBase > 0)
+   {
+      Print("--- anchor survey: which anchor would have allowed the trade ---");
+      for(int index = 0; index < ER_SURVEY_COUNT; index++)
+      {
+         if(surveyTotal[index] <= 0)
+            continue;
+         PrintFormat("  %-8s supported %6I64d of %6I64d setup-bars (%5.1f%%)"
+                     "  ratio 1:%.0f%s",
+                     EnumToString(surveyTF[index]), surveyPass[index],
+                     surveyTotal[index],
+                     100.0 * surveyPass[index] / surveyTotal[index],
+                     (double)PeriodSeconds(surveyTF[index]) / tradeTFSeconds,
+                     surveyTF[index] == anchorTF ? "   <- in use" : "");
+      }
+      Print("Pick the anchor with the highest support rate, then confirm it "
+            "with a real run. This survey costs one backtest, not four.");
+   }
 
    if(exitReasonsUsed <= 0)
       return;
@@ -1006,6 +1070,66 @@ void InvalidateBrokenSetups(int currentShift)
                   barClose, bearSetupPivotPrice);
       setupsInvalidated++;
       ConsumeBearSetup();
+   }
+}
+
+//+------------------------------------------------------------------+
+// Same rule as GetClosedAnchorTrend, against any candidate anchor. Used by
+// the survey only; it never affects a trading decision.
+// Returns 1 supported, 0 not supported, -1 data not available yet. A slower
+// anchor warms up later, so an unavailable bar must not count against it.
+int SurveyAnchorSupports(int index, datetime tradeBarOpenTime,
+                         int desiredTrend)
+{
+   if(surveyEMAHandle[index] == INVALID_HANDLE ||
+      surveyATRHandle[index] == INVALID_HANDLE)
+      return -1;
+
+   ENUM_TIMEFRAMES tf = surveyTF[index];
+   datetime closeTime = tradeBarOpenTime + tradeTFSeconds;
+   int containingShift = iBarShift(_Symbol, tf, closeTime, false);
+   if(containingShift < 0)
+      return -1;
+
+   int closedShift = containingShift + 1;
+   double ema = 0.0, atr = 0.0, olderEMA = 0.0;
+   if(!BufferValue(surveyEMAHandle[index], closedShift, ema) ||
+      !BufferValue(surveyATRHandle[index], closedShift, atr))
+      return -1;
+
+   double close = iClose(_Symbol, tf, closedShift);
+   if(close == 0.0)
+      return -1;
+
+   double band = atr * InpAnchorNeutralZoneATR;
+   int trend = close > ema + band ? ANCHOR_TREND_BULL
+             : (close < ema - band ? ANCHOR_TREND_BEAR : ANCHOR_TREND_NEUTRAL);
+   if(trend != desiredTrend)
+      return 0;
+
+   if(!InpRequireAnchorEMASlope)
+      return 1;
+   if(!BufferValue(surveyEMAHandle[index],
+                   closedShift + InpAnchorEMASlopeLookbackBars, olderEMA))
+      return -1;
+   bool slopeOk = desiredTrend == ANCHOR_TREND_BULL ? ema > olderEMA
+                                                    : ema < olderEMA;
+   return slopeOk ? 1 : 0;
+}
+
+//+------------------------------------------------------------------+
+void SurveyAnchors(datetime tradeBarOpenTime, int desiredTrend)
+{
+   if(!InpLogFilterStats)
+      return;
+   for(int index = 0; index < ER_SURVEY_COUNT; index++)
+   {
+      int verdict = SurveyAnchorSupports(index, tradeBarOpenTime, desiredTrend);
+      if(verdict < 0)
+         continue;
+      surveyTotal[index]++;
+      if(verdict == 1)
+         surveyPass[index]++;
    }
 }
 

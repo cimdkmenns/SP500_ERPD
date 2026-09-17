@@ -103,6 +103,39 @@ A gate holding a large share is the one to question. An exit route with a
 large count and a small positive average is cutting winners before the target
 can pay for the losers.
 
+## Anchor survey — one run instead of four
+
+Rather than backtesting each candidate anchor separately, the EA now asks all
+four at every live setup-bar whether they *would* have supported the trade,
+and reports it at the end of a single run:
+
+```
+--- anchor survey: which anchor would have allowed the trade ---
+  PERIOD_M15  supported   1180 of   4415 setup-bars ( 26.7%)  ratio 1:3
+  PERIOD_M30  supported    398 of   4415 setup-bars (  9.0%)  ratio 1:6   <- in use
+  PERIOD_H1   supported   1372 of   4415 setup-bars ( 31.1%)  ratio 1:12
+  PERIOD_H4   supported   2104 of   4415 setup-bars ( 47.7%)  ratio 1:24
+```
+
+(Numbers illustrative.) The survey never touches a trading decision — it only
+counts. Take the anchor with the highest support rate, set
+`InpAnchorTimeframe` to it, and confirm with a real run.
+
+Note the support rate does **not** by itself mean profitability: a very slow
+anchor allows more trades because it filters less. Compare expectancy per
+trade between the top two candidates before settling.
+
+## Included .set files
+
+- `ElderRay_Scalper_baseline.set` — every input at the frozen value. Load via
+  Strategy Tester → Inputs → Load.
+- `ElderRay_Scalper_sweep.set` — 32-pass frequency sweep over the four levers
+  that matter (anchor, dominance, entry expiry, anchor slope). Optimisation:
+  *Slow complete algorithm*, forward *No*.
+
+Judge the sweep on **expectancy per trade**, not total net profit — total
+profit rewards whichever pass happened to take the most trades.
+
 ## Testing notes
 
 1. Model **Every tick based on real ticks**. M1 OHLC modelling is meaningless
