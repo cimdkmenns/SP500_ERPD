@@ -30,11 +30,12 @@ scalp needs are new.
 | Anchor timeframe | H4 fixed | `InpAnchorTimeframe`, default Auto (M15/M30/H1) |
 | Stop | 3.0 × ATR | 2.0 × ATR |
 | Target | 4.0R | 2.0R |
-| Break-even / trail | off / 3.0R start | 1.0R / 1.5R start, 0.75R distance |
-| Max holding | off | 48 bars |
+| Break-even | off | off (see note) |
+| Trail | 3.0R start, 1.0R distance | 1.5R start, 0.5R distance (same ratio to target) |
+| Max holding | off | off (session-end flat bounds it) |
 | Risk per trade | 8% | 1% (input capped at 5%) |
-| Session | off | on, 13:00–20:00 GMT |
-| Divergence noise floor | 0.00 ATR | 0.10 ATR (also dominance 0.05 → 0.10) |
+| Session | off | on, 13:00–21:00 GMT |
+| Noise floors | as frozen | as frozen (see note) |
 | Live trading | blocked | opt-in via `InpAllowLiveTrading` |
 
 New scalping-only controls:
@@ -54,6 +55,60 @@ New scalping-only controls:
   through DST changes. **Set this to your broker's server offset** (commonly 2,
   or 3 during its summer time).
 
+## Note on the first backtest (1.5 months, M5, 6 trades)
+
+That run lost money, and it is worth being precise about what it did and did
+not show.
+
+**What it could not show:** anything about edge. Six trades is not a sample.
+With a 2R target the break-even win rate is 33%, and drawing 1 win from 6 has
+a ~35% probability even if the true win rate is a perfectly healthy 33%. The
+profit factor of 0.03 is noise around an unmeasured quantity.
+
+**What it did show, and what was fixed:**
+
+1. *Trade frequency was broken.* 0.19 trades/day is not a scalper — it is the
+   M30 EA with extra steps. That is a fact about the filters, not about luck.
+   Three noise floors had been raised above the frozen model's validated
+   values on reasoning alone (dominance 0.05→0.10, divergence 0.00→0.10,
+   anchor neutral band 0.00→0.10). All three are now back at the frozen
+   values. Undoing an unvalidated change is not curve fitting.
+2. *Exits were asymmetric against the strategy.* All five losers ran the full
+   -1R; the single winner closed at +0.16R. That is the signature of
+   break-even at 1.0R against a 2.0R target: price touches 1R, the stop moves
+   to entry + 0.1R, price retraces, and a would-be winner becomes a scratch —
+   while losers are given the whole stop. Break-even is now off, as in the
+   frozen model, and the trail is set to the same start/distance ratio to
+   target that the frozen model used. The 48-bar hard holding cap is off too;
+   session-end flat already bounds holding time.
+3. The session window was 13:00–20:00 GMT, which fits US summer time but cuts
+   the last hour of the cash session in winter. It is now 13:00–21:00.
+
+**None of the above was chosen to make those six trades profitable.** They are
+reversions to the validated model plus one structural fix. Do not read them as
+a tuned configuration.
+
+## Diagnosing trade frequency (`InpLogFilterStats`)
+
+Rather than guessing which filter starves the EA, it now counts. For every
+completed bar where a setup was pending, it records the first gate that
+refused the entry, and prints the tally at the end of the run:
+
+```
+=== Elder-Ray scalper filter statistics (PERIOD_M5 / PERIOD_M30 anchor) ===
+Setups confirmed: 214 bull, 198 bear. Entries opened: 31.
+Setup-bar decisions: 1620
+  anchor trend disagreed              742  ( 45.8%)
+  dominance                           410  ( 25.3%)
+  outside session                     338  ( 20.9%)
+  ...
+```
+
+Read it as: a gate holding a large share is the one to question first, and a
+gate sitting at 0% can be ruled out entirely. This is the number to bring to
+the next tuning conversation — it is far more informative than a P&L curve
+built on a handful of trades.
+
 ## Before you trust a backtest
 
 1. Model **Every tick based on real ticks**. M1 OHLC modelling is meaningless at
@@ -64,6 +119,13 @@ New scalping-only controls:
    wrong.
 3. Check the trade list for entries at times your broker's NAS100 is illiquid.
 4. Compare M5 against M2 on the same period before committing to M2.
+5. **Run at least 6–12 months.** Aim for 100+ trades before reading the P&L as
+   evidence of anything. At the current rate 1.5 months cannot produce that;
+   check the filter statistics first to confirm the trade rate is sane, then
+   extend the window.
+6. Optimise nothing until the trade count is adequate. Fitting parameters to a
+   6-trade sample produces a configuration that describes those six trades and
+   predicts nothing.
 
 ## Honest note on M2
 

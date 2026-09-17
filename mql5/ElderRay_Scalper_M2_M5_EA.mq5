@@ -45,19 +45,19 @@ input int                 InpEMAPeriod                  = 13;
 input ENUM_APPLIED_PRICE  InpAppliedPrice               = PRICE_CLOSE;
 input ER_ANCHOR_TF        InpAnchorTimeframe            = ER_ANCHOR_AUTO;
 input int                 InpAnchorATRPeriod            = 14;
-// Small neutral band keeps entries away from an anchor EMA the price is
-// sitting on; on a scalp that band is what removes most of the chop.
-input double              InpAnchorNeutralZoneATR       = 0.10;
+// These three noise floors are back at the frozen model's validated values.
+// Raising them looks sensible on a fast chart and starves the EA of trades:
+// measure with the filter statistics below before changing any of them.
+input double              InpAnchorNeutralZoneATR       = 0.00;
 input int                 InpTradeATRPeriod             = 14;
-input double              InpDominanceThresholdATR      = 0.10;
+input double              InpDominanceThresholdATR      = 0.05;
 input int                 InpPivotLeftBars              = 2;
 input int                 InpPivotRightBars             = 2;
 input int                 InpMinPivotSeparationBars     = 3;
 input int                 InpPivotInitializationLookback = 800;
-input int                 InpEntrySetupExpiryBars       = 3;
-input int                 InpExitWatchExpiryBars        = 24;
-// Non-zero on a scalp: a divergence of a fraction of a tick is noise.
-input double              InpMinDivergenceDeltaATR      = 0.10;
+input int                 InpEntrySetupExpiryBars       = 4;
+input int                 InpExitWatchExpiryBars        = 48;
+input double              InpMinDivergenceDeltaATR      = 0.00;
 
 input group "Confirmation filters"
 input bool                InpRequireEntryDominance      = true;
@@ -72,11 +72,15 @@ input group "Session (scalping: liquidity hours only)"
 // Hours below are GMT. Set InpServerGMTOffsetHours to this broker's server
 // offset from GMT (e.g. 2 for a UTC+2 server, 3 during its DST) so the
 // window stays anchored to the US cash session across DST changes.
+// 13-21 GMT spans the NYSE cash session under both US DST regimes
+// (13:30-20:00 GMT in summer, 14:30-21:00 GMT in winter).
 input bool                InpUseEntrySession            = true;
 input int                 InpEntryStartHour             = 13;
-input int                 InpEntryEndHour               = 20;
+input int                 InpEntryEndHour               = 21;
 input int                 InpServerGMTOffsetHours       = 0;
-input int                 InpSkipMinutesAfterSessionOpen = 5;
+// Only meaningful when InpEntryStartHour IS the cash open. The default
+// window starts before it, so this skips nothing and stays off.
+input int                 InpSkipMinutesAfterSessionOpen = 0;
 // A scalp that is still open overnight is no longer a scalp: it is an
 // unhedged index gap. Set false to let a winner run past the window.
 input bool                InpCloseAtSessionEnd          = true;
@@ -87,12 +91,18 @@ input ER_STOP_MODE        InpStopMode                   = ER_STOP_TF_ATR;
 input double              InpStopATRMultiplier          = 2.0;
 input double              InpPivotStopBufferATR         = 0.20;
 input double              InpTakeProfitR                = 2.0;
-input int                 InpMaxHoldingBars             = 48;
-input double              InpBreakEvenAtR               = 1.0;
-input double              InpBreakEvenOffsetR           = 0.10;
+// Break-even at 1.0R against a 2.0R target converts half the winning
+// distribution into +0.1R scratches while losers still run the full -1R.
+// Off, as in the frozen model; the trail does the protecting. Session-end
+// flat bounds holding time, so the hard bar cap is off as well.
+input int                 InpMaxHoldingBars             = 0;
+input double              InpBreakEvenAtR               = 0.0;
+input double              InpBreakEvenOffsetR           = 0.0;
+// Frozen model trailed from 75% of target at 25% of target. Held to that
+// ratio against the scalper's 2.0R target.
 input double              InpTrailStartR                = 1.5;
-input double              InpTrailDistanceR             = 0.75;
-input bool                InpProtectLongs               = true;
+input double              InpTrailDistanceR             = 0.50;
+input bool                InpProtectLongs               = false;
 input bool                InpProtectShorts              = true;
 input bool                InpAdaptiveProtection         = false;
 input double              InpProtectionADXThreshold     = 20.0;
@@ -137,6 +147,10 @@ input group "Execution"
 // The parent EA is Strategy-Tester-only. Live use stays opt-in here, and the
 // balance peak used by the drawdown throttle must be restored by hand after
 // a restart because it is not persisted.
+// Counts, for every completed bar on which a setup was pending, the FIRST
+// gate that refused the entry. The tally is printed when the test ends and
+// is the only reliable way to see which filter is starving the EA.
+input bool                InpLogFilterStats             = true;
 input bool                InpAllowLiveTrading           = false;
 input double              InpRiskPeakBalanceOverride    = 0.0;
 input ulong               InpMagicNumber                = 41302641;
@@ -149,6 +163,31 @@ enum ANCHOR_TREND_STATE
    ANCHOR_TREND_NEUTRAL = 0,
    ANCHOR_TREND_BULL    = 1
 };
+
+// Ordered so the tally attributes a refusal to the most informative cause:
+// signal-shape gates first, operating gates last.
+enum ER_BLOCK_REASON
+{
+   ER_BLOCK_NONE = 0,
+   ER_BLOCK_DIRECTION_DISABLED,
+   ER_BLOCK_ENTRY_EXPIRED,
+   ER_BLOCK_AFTER_POTENTIAL_EXIT,
+   ER_BLOCK_ANCHOR_TREND,
+   ER_BLOCK_ANCHOR_SLOPE,
+   ER_BLOCK_TRADE_SLOPE,
+   ER_BLOCK_DOMINANCE,
+   ER_BLOCK_SESSION,
+   ER_BLOCK_COOLDOWN,
+   ER_BLOCK_DAY_BUDGET,
+   ER_BLOCK_VOLATILITY,
+   ER_BLOCK_SPREAD,
+   ER_BLOCK_REASON_COUNT
+};
+
+long blockCounts[ER_BLOCK_REASON_COUNT];
+long bullSetupsConfirmed = 0;
+long bearSetupsConfirmed = 0;
+long entriesOpened = 0;
 
 CTrade trade;
 double riskBalancePeak = 0.0;
@@ -232,6 +271,10 @@ int OnInit()
    dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    tradesToday = 0;
    dailyLossStopHit = false;
+   ArrayInitialize(blockCounts, 0);
+   bullSetupsConfirmed = 0;
+   bearSetupsConfirmed = 0;
+   entriesOpened = 0;
 
    if(InpEMAPeriod < 2 || InpAnchorATRPeriod < 2 ||
       InpAnchorNeutralZoneATR < 0.0 || InpTradeATRPeriod < 2 ||
@@ -311,6 +354,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   PrintFilterStatistics();
    ReleaseHandles();
 }
 
@@ -501,37 +545,21 @@ void ProcessClosedTradeBar(int closedShift)
    bool bearDominant = dominanceReady && dominance < -threshold;
    bool bullDominant = dominanceReady && dominance > threshold;
 
-   bool entryAllowed = EntryWindowAllowed(closedBarTime) &&
-                       TradingBudgetAllows() &&
-                       closedBarTime >= cooldownReleaseTime;
+   // Identical conjunction to the frozen model, evaluated as an ordered gate
+   // chain so the first refusal can be attributed and counted.
+   int longBlock = EvaluateEntryBlock(POSITION_TYPE_BUY, closedBarTime,
+                                      closedShift, anchorTrend,
+                                      bullDominant, currentATR);
+   int shortBlock = EvaluateEntryBlock(POSITION_TYPE_SELL, closedBarTime,
+                                       closedShift, anchorTrend,
+                                       bearDominant, currentATR);
+   if(longBlock >= 0)
+      blockCounts[longBlock]++;
+   if(shortBlock >= 0)
+      blockCounts[shortBlock]++;
 
-   bool longEntry = entryAllowed && InpAllowLongEntries &&
-                    anchorTrend == ANCHOR_TREND_BULL &&
-                    bullSetupActive && !bullEntryWindowExpired &&
-                    BarIsAtOrAfter(closedBarTime, bullSetupConfirmedTime) &&
-                    (lastPotentialLongExitBar == 0 ||
-                     bullSetupConfirmedTime > lastPotentialLongExitBar) &&
-                    (!InpRequireEntryDominance || bullDominant) &&
-                    AnchorSlopeSupports(closedBarTime, ANCHOR_TREND_BULL) &&
-                    TradeSlopeSupports(closedShift, ANCHOR_TREND_BULL);
-   bool shortEntry = entryAllowed && InpAllowShortEntries &&
-                     anchorTrend == ANCHOR_TREND_BEAR &&
-                     bearSetupActive && !bearEntryWindowExpired &&
-                     BarIsAtOrAfter(closedBarTime, bearSetupConfirmedTime) &&
-                     (lastPotentialShortExitBar == 0 ||
-                      bearSetupConfirmedTime > lastPotentialShortExitBar) &&
-                     (!InpRequireEntryDominance || bearDominant) &&
-                     AnchorSlopeSupports(closedBarTime, ANCHOR_TREND_BEAR) &&
-                     TradeSlopeSupports(closedShift, ANCHOR_TREND_BEAR);
-
-   // Cost gates are evaluated only once a signal would otherwise fire, so a
-   // quiet session does not fill the journal with spread messages.
-   if((longEntry || shortEntry) &&
-      (!VolatilityAllowsEntry(currentATR) || !SpreadAllowsEntry(currentATR)))
-   {
-      longEntry = false;
-      shortEntry = false;
-   }
+   bool longEntry = (longBlock == ER_BLOCK_NONE);
+   bool shortEntry = (shortBlock == ER_BLOCK_NONE);
 
    bool usePotentialExit =
       InpExitMode == ER_EXIT_POTENTIAL_ONLY ||
@@ -648,7 +676,10 @@ void ProcessClosedTradeBar(int closedShift)
                                TIME_DATE | TIME_MINUTES));
       if(ExecuteConfirmedDirection(POSITION_TYPE_BUY, closedBarTime,
                                    currentATR, bullSetupPivotPrice))
+      {
          tradesToday++;
+         entriesOpened++;
+      }
       ConsumeBullSetup();
    }
 
@@ -660,11 +691,119 @@ void ProcessClosedTradeBar(int closedShift)
                                TIME_DATE | TIME_MINUTES));
       if(ExecuteConfirmedDirection(POSITION_TYPE_SELL, closedBarTime,
                                    currentATR, bearSetupPivotPrice))
+      {
          tradesToday++;
+         entriesOpened++;
+      }
       ConsumeBearSetup();
    }
 
    UpdateCooldownState(closedBarTime);
+}
+
+//+------------------------------------------------------------------+
+// Returns -1 when no setup is pending in this direction (nothing to refuse,
+// so nothing is counted), ER_BLOCK_NONE when every gate passes, otherwise
+// the first gate that refused.
+int EvaluateEntryBlock(ENUM_POSITION_TYPE desiredType,
+                       datetime closedBarTime,
+                       int closedShift,
+                       int anchorTrend,
+                       bool dominant,
+                       double currentATR)
+{
+   bool isLong = (desiredType == POSITION_TYPE_BUY);
+   bool setupActive = isLong ? bullSetupActive : bearSetupActive;
+   datetime confirmed = isLong ? bullSetupConfirmedTime : bearSetupConfirmedTime;
+   if(!setupActive || !BarIsAtOrAfter(closedBarTime, confirmed))
+      return -1;
+
+   if(isLong ? !InpAllowLongEntries : !InpAllowShortEntries)
+      return ER_BLOCK_DIRECTION_DISABLED;
+   if(isLong ? bullEntryWindowExpired : bearEntryWindowExpired)
+      return ER_BLOCK_ENTRY_EXPIRED;
+
+   datetime lastExit = isLong ? lastPotentialLongExitBar
+                              : lastPotentialShortExitBar;
+   if(lastExit != 0 && confirmed <= lastExit)
+      return ER_BLOCK_AFTER_POTENTIAL_EXIT;
+
+   int desiredTrend = isLong ? ANCHOR_TREND_BULL : ANCHOR_TREND_BEAR;
+   if(anchorTrend != desiredTrend)
+      return ER_BLOCK_ANCHOR_TREND;
+   if(!AnchorSlopeSupports(closedBarTime, desiredTrend))
+      return ER_BLOCK_ANCHOR_SLOPE;
+   if(!TradeSlopeSupports(closedShift, desiredTrend))
+      return ER_BLOCK_TRADE_SLOPE;
+   if(InpRequireEntryDominance && !dominant)
+      return ER_BLOCK_DOMINANCE;
+
+   if(!EntryWindowAllowed(closedBarTime))
+      return ER_BLOCK_SESSION;
+   if(closedBarTime < cooldownReleaseTime)
+      return ER_BLOCK_COOLDOWN;
+   if(!TradingBudgetAllows())
+      return ER_BLOCK_DAY_BUDGET;
+   if(!VolatilityAllowsEntry(currentATR))
+      return ER_BLOCK_VOLATILITY;
+   if(!SpreadAllowsEntry(currentATR))
+      return ER_BLOCK_SPREAD;
+   return ER_BLOCK_NONE;
+}
+
+//+------------------------------------------------------------------+
+string BlockReasonName(int reason)
+{
+   switch(reason)
+   {
+      case ER_BLOCK_NONE:                  return "passed all gates";
+      case ER_BLOCK_DIRECTION_DISABLED:    return "direction disabled";
+      case ER_BLOCK_ENTRY_EXPIRED:         return "entry window expired";
+      case ER_BLOCK_AFTER_POTENTIAL_EXIT:  return "setup predates last exit";
+      case ER_BLOCK_ANCHOR_TREND:          return "anchor trend disagreed";
+      case ER_BLOCK_ANCHOR_SLOPE:          return "anchor EMA slope";
+      case ER_BLOCK_TRADE_SLOPE:           return "trade EMA slope";
+      case ER_BLOCK_DOMINANCE:             return "dominance";
+      case ER_BLOCK_SESSION:               return "outside session";
+      case ER_BLOCK_COOLDOWN:              return "cooldown";
+      case ER_BLOCK_DAY_BUDGET:            return "day trade/loss cap";
+      case ER_BLOCK_VOLATILITY:            return "ATR below floor";
+      case ER_BLOCK_SPREAD:                return "spread too wide";
+   }
+   return "unknown";
+}
+
+//+------------------------------------------------------------------+
+void PrintFilterStatistics()
+{
+   if(!InpLogFilterStats)
+      return;
+
+   long total = 0;
+   for(int reason = 0; reason < ER_BLOCK_REASON_COUNT; reason++)
+      total += blockCounts[reason];
+
+   PrintFormat("=== Elder-Ray scalper filter statistics (%s / %s anchor) ===",
+               EnumToString(tradeTF), EnumToString(anchorTF));
+   PrintFormat("Setups confirmed: %I64d bull, %I64d bear. "
+               "Entries opened: %I64d.",
+               bullSetupsConfirmed, bearSetupsConfirmed, entriesOpened);
+   if(total <= 0)
+   {
+      Print("No setup was ever pending on a completed bar.");
+      return;
+   }
+
+   PrintFormat("Setup-bar decisions: %I64d", total);
+   for(int reason = 0; reason < ER_BLOCK_REASON_COUNT; reason++)
+   {
+      if(blockCounts[reason] <= 0)
+         continue;
+      PrintFormat("  %-28s %8I64d  (%5.1f%%)", BlockReasonName(reason),
+                  blockCounts[reason], 100.0 * blockCounts[reason] / total);
+   }
+   Print("A gate holding a large share is the one to question first. A gate "
+         "at 0% is doing nothing and can be ruled out as the cause.");
 }
 
 //+------------------------------------------------------------------+
@@ -700,6 +839,7 @@ void CheckNewlyConfirmedPivot(int closedShift)
       if(bullishDivergence)
       {
          bullSetupActive = true;
+         bullSetupsConfirmed++;
          bullSetupConfirmedTime = confirmationTime;
          bullSetupPivotPrice = pivotLow;
          bullEntryWindowExpired = false;
@@ -731,6 +871,7 @@ void CheckNewlyConfirmedPivot(int closedShift)
       if(bearishDivergence)
       {
          bearSetupActive = true;
+         bearSetupsConfirmed++;
          bearSetupConfirmedTime = confirmationTime;
          bearSetupPivotPrice = pivotHigh;
          bearEntryWindowExpired = false;
