@@ -3,13 +3,192 @@
 `ElderRay_Scalper_M2_M5_EA.mq5` runs the frozen H4/M30 Elder-Ray model
 (v6.31 strategy / v6.40 tester EA) on a scalping chart.
 
-**All 59 of the frozen model's strategy parameters are unchanged.** The EMA,
-ATR periods, pivot geometry, divergence rules, dominance threshold, neutral
-zone, expiry windows, stop mode and multiplier, 4.0R target, trailing,
-break-even, protection flags, risk percentage and drawdown throttle are all
-exactly as you validated them. The only thing this EA changes is **which
-timeframes the model reads**, plus two additive cost guards.
+## Nothing to configure
 
+**The settings are already compiled into the file.** All 72 input defaults
+in the source are exactly the configuration described here, and all 59 of
+your frozen model's strategy parameters are byte-identical to your
+original EA. To run the diagnostic:
+
+1. Copy `ElderRay_Scalper_M2_M5_EA.mq5` to
+   `<MT5 data folder>\MQL5\Experts\` (File → Open Data Folder).
+2. Compile it in MetaEditor (F7).
+3. Strategy Tester: symbol NAS100, period **M5**, model **Every tick
+   based on real ticks**, 6–12 months.
+4. Press Start. **Do not touch the Inputs tab.**
+
+The `.set` files are optional. `ElderRay_Scalper_baseline.set` is provided
+only for resetting after experimenting — loading it changes nothing on a
+fresh compile. Presets live in `<MT5 data folder>\MQL5\Presets\`.
+
+The single run reports which anchor timeframe you should be using, so
+there is no anchor sweep to set up by hand.
+
+## Complete input reference
+
+Generated from the source file, so it cannot drift from what compiles.
+
+| Input | Type | Default |
+| --- | --- | --- |
+| **Elder-Ray core (unchanged principles)** | | |
+| `InpEMAPeriod` | int | `13` |
+| `InpAppliedPrice` | ENUM_APPLIED_PRICE | `PRICE_CLOSE` |
+| `InpAnchorTimeframe` | ER_ANCHOR_TF | `ER_ANCHOR_AUTO` |
+| `InpAnchorATRPeriod` | int | `14` |
+| `InpAnchorNeutralZoneATR` | double | `0.00` |
+| `InpTradeATRPeriod` | int | `14` |
+| `InpDominanceThresholdATR` | double | `0.05` |
+| `InpPivotLeftBars` | int | `2` |
+| `InpPivotRightBars` | int | `2` |
+| `InpMinPivotSeparationBars` | int | `3` |
+| `InpPivotInitializationLookback` | int | `500` |
+| `InpEntrySetupExpiryBars` | int | `4` |
+| `InpExitWatchExpiryBars` | int | `48` |
+| `InpMinDivergenceDeltaATR` | double | `0.00` |
+| **Confirmation filters** | | |
+| `InpRequireEntryDominance` | bool | `true` |
+| `InpRequireAnchorEMASlope` | bool | `true` |
+| `InpAnchorEMASlopeLookbackBars` | int | `1` |
+| `InpRequireTradeEMASlope` | bool | `false` |
+| `InpTradeEMASlopeLookbackBars` | int | `1` |
+| `InpAllowLongEntries` | bool | `true` |
+| `InpAllowShortEntries` | bool | `true` |
+| **Session (off, as in the frozen model)** | | |
+| `InpUseEntrySession` | bool | `false` |
+| `InpEntryStartHour` | int | `0` |
+| `InpEntryEndHour` | int | `24` |
+| `InpServerGMTOffsetHours` | int | `0` |
+| `InpSkipMinutesAfterSessionOpen` | int | `0` |
+| `InpCloseAtSessionEnd` | bool | `false` |
+| **Exits and trade protection** | | |
+| `InpExitMode` | ER_EXIT_MODE | `ER_EXIT_OPPOSITE_CONFIRMED_ONLY` |
+| `InpStopMode` | ER_STOP_MODE | `ER_STOP_TF_ATR` |
+| `InpStopATRMultiplier` | double | `3.0` |
+| `InpPivotStopBufferATR` | double | `0.25` |
+| `InpTakeProfitR` | double | `4.0` |
+| `InpMaxHoldingBars` | int | `0` |
+| `InpBreakEvenAtR` | double | `0.0` |
+| `InpBreakEvenOffsetR` | double | `0.0` |
+| `InpTrailStartR` | double | `3.0` |
+| `InpTrailDistanceR` | double | `1.0` |
+| `InpProtectLongs` | bool | `false` |
+| `InpProtectShorts` | bool | `true` |
+| `InpAdaptiveProtection` | bool | `false` |
+| `InpProtectionADXThreshold` | double | `20.0` |
+| `InpWeakTrendBreakEvenAtR` | double | `0.5` |
+| `InpCutLosingAnchorReversals` | bool | `true` |
+| `InpCutLosingLongs` | bool | `false` |
+| `InpAnchorReversalLossR` | double | `0.25` |
+| **Scalping cost and frequency guards (new)** | | |
+| `InpMaxSpreadATR` | double | `0.30` |
+| `InpMinStopSpreadMultiple` | double | `5.0` |
+| `InpMinATRPoints` | double | `0.0` |
+| `InpCooldownBars` | int | `0` |
+| `InpMaxTradesPerDay` | int | `0` |
+| `InpDailyLossStopPercent` | double | `0.0` |
+| **Position sizing and account risk** | | |
+| `InpUseRiskBasedVolume` | bool | `true` |
+| `InpRiskPercent` | double | `8.0` |
+| `InpRiskCapitalBase` | double | `10000.0` |
+| `InpProfitReinvestmentFraction` | double | `0.5` |
+| `InpMaxSizingCapitalMultiple` | double | `1.5` |
+| `InpUseDrawdownThrottle` | bool | `true` |
+| `InpDrawdownThrottleStartPct` | double | `30.0` |
+| `InpDrawdownThrottleRecoveryPct` | double | `10.0` |
+| `InpDrawdownThrottleMultiplier` | double | `0.5` |
+| `InpShortRiskMultiplier` | double | `0.5` |
+| `InpScaleOnlyWeakShorts` | bool | `true` |
+| `InpFullShortRiskMinADX` | double | `15.0` |
+| `InpCapVolumeToMargin` | bool | `false` |
+| `InpMaxFreeMarginUsePercent` | double | `75.0` |
+| `InpLots` | double | `1.0` |
+| **Execution** | | |
+| `InpLogFilterStats` | bool | `true` |
+| `InpAllowLiveTrading` | bool | `false` |
+| `InpRiskPeakBalanceOverride` | double | `0.0` |
+| `InpMagicNumber` | ulong | `41302641` |
+| `InpDeviationPoints` | ulong | `20` |
+| `InpTradeComment` | string | `ER Scalp` |
+
+## Baseline .set contents
+
+If you would rather create the preset yourself, save this as
+`ElderRay_Scalper_baseline.set` in `MQL5\Presets\`:
+
+```
+InpEMAPeriod=13||0||0||0||N
+InpAppliedPrice=1||0||0||0||N
+InpAnchorTimeframe=0||0||0||0||N
+InpAnchorATRPeriod=14||0||0||0||N
+InpAnchorNeutralZoneATR=0.00||0||0||0||N
+InpTradeATRPeriod=14||0||0||0||N
+InpDominanceThresholdATR=0.05||0||0||0||N
+InpPivotLeftBars=2||0||0||0||N
+InpPivotRightBars=2||0||0||0||N
+InpMinPivotSeparationBars=3||0||0||0||N
+InpPivotInitializationLookback=500||0||0||0||N
+InpEntrySetupExpiryBars=4||0||0||0||N
+InpExitWatchExpiryBars=48||0||0||0||N
+InpMinDivergenceDeltaATR=0.00||0||0||0||N
+InpRequireEntryDominance=true||0||0||0||N
+InpRequireAnchorEMASlope=true||0||0||0||N
+InpAnchorEMASlopeLookbackBars=1||0||0||0||N
+InpRequireTradeEMASlope=false||0||0||0||N
+InpTradeEMASlopeLookbackBars=1||0||0||0||N
+InpAllowLongEntries=true||0||0||0||N
+InpAllowShortEntries=true||0||0||0||N
+InpUseEntrySession=false||0||0||0||N
+InpEntryStartHour=0||0||0||0||N
+InpEntryEndHour=24||0||0||0||N
+InpServerGMTOffsetHours=0||0||0||0||N
+InpSkipMinutesAfterSessionOpen=0||0||0||0||N
+InpCloseAtSessionEnd=false||0||0||0||N
+InpExitMode=0||0||0||0||N
+InpStopMode=1||0||0||0||N
+InpStopATRMultiplier=3.0||0||0||0||N
+InpPivotStopBufferATR=0.25||0||0||0||N
+InpTakeProfitR=4.0||0||0||0||N
+InpMaxHoldingBars=0||0||0||0||N
+InpBreakEvenAtR=0.0||0||0||0||N
+InpBreakEvenOffsetR=0.0||0||0||0||N
+InpTrailStartR=3.0||0||0||0||N
+InpTrailDistanceR=1.0||0||0||0||N
+InpProtectLongs=false||0||0||0||N
+InpProtectShorts=true||0||0||0||N
+InpAdaptiveProtection=false||0||0||0||N
+InpProtectionADXThreshold=20.0||0||0||0||N
+InpWeakTrendBreakEvenAtR=0.5||0||0||0||N
+InpCutLosingAnchorReversals=true||0||0||0||N
+InpCutLosingLongs=false||0||0||0||N
+InpAnchorReversalLossR=0.25||0||0||0||N
+InpMaxSpreadATR=0.30||0||0||0||N
+InpMinStopSpreadMultiple=5.0||0||0||0||N
+InpMinATRPoints=0.0||0||0||0||N
+InpCooldownBars=0||0||0||0||N
+InpMaxTradesPerDay=0||0||0||0||N
+InpDailyLossStopPercent=0.0||0||0||0||N
+InpUseRiskBasedVolume=true||0||0||0||N
+InpRiskPercent=8.0||0||0||0||N
+InpRiskCapitalBase=10000.0||0||0||0||N
+InpProfitReinvestmentFraction=0.5||0||0||0||N
+InpMaxSizingCapitalMultiple=1.5||0||0||0||N
+InpUseDrawdownThrottle=true||0||0||0||N
+InpDrawdownThrottleStartPct=30.0||0||0||0||N
+InpDrawdownThrottleRecoveryPct=10.0||0||0||0||N
+InpDrawdownThrottleMultiplier=0.5||0||0||0||N
+InpShortRiskMultiplier=0.5||0||0||0||N
+InpScaleOnlyWeakShorts=true||0||0||0||N
+InpFullShortRiskMinADX=15.0||0||0||0||N
+InpCapVolumeToMargin=false||0||0||0||N
+InpMaxFreeMarginUsePercent=75.0||0||0||0||N
+InpLots=1.0||0||0||0||N
+InpLogFilterStats=true||0||0||0||N
+InpAllowLiveTrading=false||0||0||0||N
+InpRiskPeakBalanceOverride=0.0||0||0||0||N
+InpMagicNumber=41302641||0||0||0||N
+InpDeviationPoints=20||0||0||0||N
+InpTradeComment=ER Scalp||0||0||0||N
+```
 ## The one real change: the anchor timeframe ratio
 
 The frozen model trades M30 and reads H4 — an anchor **8x** its trade
