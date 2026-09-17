@@ -45,16 +45,16 @@ input int                 InpEMAPeriod                  = 13;
 input ENUM_APPLIED_PRICE  InpAppliedPrice               = PRICE_CLOSE;
 input ER_ANCHOR_TF        InpAnchorTimeframe            = ER_ANCHOR_AUTO;
 input int                 InpAnchorATRPeriod            = 14;
-// These three noise floors are back at the frozen model's validated values.
-// Raising them looks sensible on a fast chart and starves the EA of trades:
-// measure with the filter statistics below before changing any of them.
+// Every value in this file is the frozen model's. The only thing this EA
+// changes is WHICH timeframes the model reads. Cost guards are additive and
+// default to a setting that refuses nothing.
 input double              InpAnchorNeutralZoneATR       = 0.00;
 input int                 InpTradeATRPeriod             = 14;
 input double              InpDominanceThresholdATR      = 0.05;
 input int                 InpPivotLeftBars              = 2;
 input int                 InpPivotRightBars             = 2;
 input int                 InpMinPivotSeparationBars     = 3;
-input int                 InpPivotInitializationLookback = 800;
+input int                 InpPivotInitializationLookback = 500;
 input int                 InpEntrySetupExpiryBars       = 4;
 input int                 InpExitWatchExpiryBars        = 48;
 input double              InpMinDivergenceDeltaATR      = 0.00;
@@ -68,42 +68,36 @@ input int                 InpTradeEMASlopeLookbackBars  = 1;
 input bool                InpAllowLongEntries           = true;
 input bool                InpAllowShortEntries          = true;
 
-input group "Session (scalping: liquidity hours only)"
+input group "Session (off, as in the frozen model)"
 // Hours below are GMT. Set InpServerGMTOffsetHours to this broker's server
 // offset from GMT (e.g. 2 for a UTC+2 server, 3 during its DST) so the
 // window stays anchored to the US cash session across DST changes.
-// 13-21 GMT spans the NYSE cash session under both US DST regimes
-// (13:30-20:00 GMT in summer, 14:30-21:00 GMT in winter).
-input bool                InpUseEntrySession            = true;
-input int                 InpEntryStartHour             = 13;
-input int                 InpEntryEndHour               = 21;
+// Frozen default is the full day (0-24, disabled). If you want the US cash
+// session, 13-21 GMT spans it under both DST regimes (13:30-20:00 summer,
+// 14:30-21:00 winter). Test it as a change, do not assume it helps: it
+// refused only 3.8% of live setup-bars in the 8-month M5 run.
+input bool                InpUseEntrySession            = false;
+input int                 InpEntryStartHour             = 0;
+input int                 InpEntryEndHour               = 24;
 input int                 InpServerGMTOffsetHours       = 0;
 // Only meaningful when InpEntryStartHour IS the cash open. The default
 // window starts before it, so this skips nothing and stays off.
 input int                 InpSkipMinutesAfterSessionOpen = 0;
 // A scalp that is still open overnight is no longer a scalp: it is an
 // unhedged index gap. Set false to let a winner run past the window.
-input bool                InpCloseAtSessionEnd          = true;
+input bool                InpCloseAtSessionEnd          = false;
 
 input group "Exits and trade protection"
 input ER_EXIT_MODE        InpExitMode                   = ER_EXIT_OPPOSITE_CONFIRMED_ONLY;
 input ER_STOP_MODE        InpStopMode                   = ER_STOP_TF_ATR;
-input double              InpStopATRMultiplier          = 2.0;
-input double              InpPivotStopBufferATR         = 0.20;
-// The frozen model's edge lives in its tail: ~35-40% of trades win, and they
-// must pay 4x a loser. Cutting this to 2.0R "for scalping realism" produced a
-// 0.93 payoff ratio needing a 51.7% win rate - unreachable for this setup.
-// Back at the frozen value; the stop stays at the tighter scalping 2.0 x ATR.
+input double              InpStopATRMultiplier          = 3.0;
+input double              InpPivotStopBufferATR         = 0.25;
 input double              InpTakeProfitR                = 4.0;
-// Break-even at 1.0R against a 2.0R target converts half the winning
-// distribution into +0.1R scratches while losers still run the full -1R.
-// Off, as in the frozen model; the trail does the protecting. Session-end
-// flat bounds holding time, so the hard bar cap is off as well.
 input int                 InpMaxHoldingBars             = 0;
 input double              InpBreakEvenAtR               = 0.0;
 input double              InpBreakEvenOffsetR           = 0.0;
 input double              InpTrailStartR                = 3.0;
-input double              InpTrailDistanceR             = 1.00;
+input double              InpTrailDistanceR             = 1.0;
 input bool                InpProtectLongs               = false;
 input bool                InpProtectShorts              = true;
 input bool                InpAdaptiveProtection         = false;
@@ -119,29 +113,29 @@ input group "Scalping cost and frequency guards (new)"
 input double              InpMaxSpreadATR               = 0.30;
 input double              InpMinStopSpreadMultiple      = 5.0;
 input double              InpMinATRPoints               = 0.0;
-input int                 InpCooldownBars               = 3;
-input int                 InpMaxTradesPerDay            = 6;
-input double              InpDailyLossStopPercent       = 3.0;
+input int                 InpCooldownBars               = 0;
+input int                 InpMaxTradesPerDay            = 0;
+input double              InpDailyLossStopPercent       = 0.0;
 
 input group "Position sizing and account risk"
 // Risk-based sizing never rounds a position up to the broker minimum. If the
 // minimum lot would exceed the risk budget, the trade is skipped. Fixed-lot
 // mode retains the original EA's broker-volume normalization.
 input bool                InpUseRiskBasedVolume         = true;
-// Far lower than the M30 model on purpose: a scalper takes many more trades,
-// so the same per-trade percentage compounds losing streaks much faster.
-input double              InpRiskPercent                = 1.0;
+// The frozen model's 8%. At scalping trade counts this compounds a losing
+// streak far faster than it does on M30 - see the README before trading it.
+input double              InpRiskPercent                = 8.0;
 input double              InpRiskCapitalBase            = 10000.0;
 input double              InpProfitReinvestmentFraction = 0.5;
 input double              InpMaxSizingCapitalMultiple   = 1.5;
 input bool                InpUseDrawdownThrottle        = true;
-input double              InpDrawdownThrottleStartPct   = 20.0;
-input double              InpDrawdownThrottleRecoveryPct = 8.0;
+input double              InpDrawdownThrottleStartPct   = 30.0;
+input double              InpDrawdownThrottleRecoveryPct = 10.0;
 input double              InpDrawdownThrottleMultiplier = 0.5;
 input double              InpShortRiskMultiplier        = 0.5;
 input bool                InpScaleOnlyWeakShorts        = true;
 input double              InpFullShortRiskMinADX        = 15.0;
-input bool                InpCapVolumeToMargin          = true;
+input bool                InpCapVolumeToMargin          = false;
 input double              InpMaxFreeMarginUsePercent    = 75.0;
 input double              InpLots                       = 1.0;
 
@@ -201,6 +195,8 @@ string pendingCloseReason = "";
 long bullSetupsConfirmed = 0;
 long bearSetupsConfirmed = 0;
 long entriesOpened = 0;
+long setupsExpiredUnused = 0;
+long setupsInvalidated = 0;
 
 CTrade trade;
 double riskBalancePeak = 0.0;
@@ -294,6 +290,8 @@ int OnInit()
    bullSetupsConfirmed = 0;
    bearSetupsConfirmed = 0;
    entriesOpened = 0;
+   setupsExpiredUnused = 0;
+   setupsInvalidated = 0;
 
    if(InpEMAPeriod < 2 || InpAnchorATRPeriod < 2 ||
       InpAnchorNeutralZoneATR < 0.0 || InpTradeATRPeriod < 2 ||
@@ -324,7 +322,7 @@ int OnInit()
       InpDailyLossStopPercent >= 100.0 ||
       (InpTrailStartR > 0.0 && InpTakeProfitR <= 0.0) ||
       (InpBreakEvenAtR > 0.0 && InpTakeProfitR <= 0.0) ||
-      InpRiskPercent <= 0.0 || InpRiskPercent > 5.0 || InpLots <= 0.0 ||
+      InpRiskPercent <= 0.0 || InpRiskPercent > 8.0 || InpLots <= 0.0 ||
       InpDrawdownThrottleStartPct <= 0.0 || InpDrawdownThrottleStartPct >= 100.0 ||
       InpDrawdownThrottleRecoveryPct < 0.0 ||
       InpDrawdownThrottleRecoveryPct >= InpDrawdownThrottleStartPct ||
@@ -391,12 +389,16 @@ ENUM_TIMEFRAMES ResolveAnchorTimeframe()
       }
    }
 
-   // Roughly the same trade-to-anchor ratio the M30/H4 model used (8x).
+   // The frozen model reads an anchor 8x its trade timeframe (M30/H4). That
+   // ratio is what keeps a trade-timeframe swing too small to flip the anchor
+   // at the moment a divergence forms. At 1:6 (M5/M30) the anchor disagreed
+   // with 91% of live setup-bars, because an M5 swing IS a move on M30.
+   // M2 -> M15 is 1:7.5 and reproduces the frozen geometry most closely.
    if(tradeTFSeconds <= 3 * 60)
       return PERIOD_M15;
    if(tradeTFSeconds <= 6 * 60)
-      return PERIOD_M30;
-   return PERIOD_H1;
+      return PERIOD_H1;
+   return PERIOD_H4;
 }
 
 //+------------------------------------------------------------------+
@@ -739,8 +741,10 @@ int EvaluateEntryBlock(ENUM_POSITION_TYPE desiredType,
 
    if(isLong ? !InpAllowLongEntries : !InpAllowShortEntries)
       return ER_BLOCK_DIRECTION_DISABLED;
+   // An expired setup stays alive for the exit watch. Counting it on every
+   // one of those bars swamped the tally; it is reported per setup instead.
    if(isLong ? bullEntryWindowExpired : bearEntryWindowExpired)
-      return ER_BLOCK_ENTRY_EXPIRED;
+      return -1;
 
    datetime lastExit = isLong ? lastPotentialLongExitBar
                               : lastPotentialShortExitBar;
@@ -804,9 +808,13 @@ void PrintFilterStatistics()
 
    PrintFormat("=== Elder-Ray scalper filter statistics (%s / %s anchor) ===",
                EnumToString(tradeTF), EnumToString(anchorTF));
-   PrintFormat("Setups confirmed: %I64d bull, %I64d bear. "
-               "Entries opened: %I64d.",
-               bullSetupsConfirmed, bearSetupsConfirmed, entriesOpened);
+   long setupsTotal = bullSetupsConfirmed + bearSetupsConfirmed;
+   PrintFormat("Setups confirmed: %I64d bull, %I64d bear (%I64d total).",
+               bullSetupsConfirmed, bearSetupsConfirmed, setupsTotal);
+   PrintFormat("  -> entries opened      %I64d", entriesOpened);
+   PrintFormat("  -> expired unused      %I64d", setupsExpiredUnused);
+   PrintFormat("  -> invalidated by price %I64d", setupsInvalidated);
+   Print("Gate tally below covers only bars inside a live entry window.");
    if(total <= 0)
    {
       Print("No setup was ever pending on a completed bar.");
@@ -949,6 +957,7 @@ void ExpireOldSetups(int currentShift)
               elapsed > InpEntrySetupExpiryBars)
       {
          bullEntryWindowExpired = true;
+         setupsExpiredUnused++;
          Print("BULL_SETUP entry window expired; it cannot generate an entry.");
       }
    }
@@ -965,6 +974,7 @@ void ExpireOldSetups(int currentShift)
               elapsed > InpEntrySetupExpiryBars)
       {
          bearEntryWindowExpired = true;
+         setupsExpiredUnused++;
          Print("BEAR_SETUP entry window expired; it cannot generate an entry.");
       }
    }
@@ -983,6 +993,7 @@ void InvalidateBrokenSetups(int currentShift)
       PrintFormat("BULL_SETUP invalidated at %s: close %.5f below pivot %.5f",
                   TimeToString(barTime, TIME_DATE | TIME_MINUTES),
                   barClose, bullSetupPivotPrice);
+      setupsInvalidated++;
       ConsumeBullSetup();
    }
 
@@ -993,6 +1004,7 @@ void InvalidateBrokenSetups(int currentShift)
       PrintFormat("BEAR_SETUP invalidated at %s: close %.5f above pivot %.5f",
                   TimeToString(barTime, TIME_DATE | TIME_MINUTES),
                   barClose, bearSetupPivotPrice);
+      setupsInvalidated++;
       ConsumeBearSetup();
    }
 }
